@@ -1,0 +1,279 @@
+🏪 Commission shop grouping: {
+  "No Commission Shop": [
+    {
+      "id": "03001231234",
+      "name": "Abdullah",
+      "phone": "03001231234",
+      "village": "N/A",
+      "creditLimit": 0,
+      "currentBalance": 4500,
+      "overdueAmount": 0,
+      "lastPayment": "",
+      "transactions": [
+        {
+          "id": "ORD-2026-489153",
+          "date": "2026-03-18T05:58:09.153Z",
+          "items": [
+            {
+              "unit": "8 KG",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/Untitled-1_0074_Enrich-8kg.jpg",
+              "price": 4500,
+              "expiry": "2026-05-12",
+              "batchId": "001",
+              "quantity": 1,
+              "productId": "SYN-013",
+              "variantId": "SYN-013-V1",
+              "productName": "ENRICH ",
+              "variantName": "ENRICH  8 KG"
+            }
+          ],
+          "phone": "03001231234",
+          "total": 4500,
+          "status": "Completed",
+          "address": "Lahore",
+          "payment": "Credit",
+          "customer": "Abdullah",
+          "discount": 0,
+          "subtotal": 4500,
+          "createdAt": "2026-03-18T05:58:09.153Z",
+          "updatedAt": "2026-03-18T05:58:09.153Z",
+          "cashAmount": 0,
+          "creditAmount": 4500
+        }
+      ],
+      "totalPurchases": 4500,
+      "purchaseCount": 1
+    },
+    {
+      "id": "03029555755",
+      "name": "Asad",
+      "phone": "03029555755",
+      "village": "N/A",
+      "creditLimit": 0,
+      "currentBalance": 0,
+      "overdueAmount": 0,
+      "lastPayment": "",
+      "transactions": [
+        {
+          "id": "ORD-2026-929928",
+          "date": "2026-03-12T09:48:49.928Z",
+          "items": [
+            {
+              "unit": "600 ML",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/Amistar-Top-600-ml-1.png",
+              "price": 4400,
+              "expiry": "2027-01-01",
+              "batchId": "001",
+              "quantity": 2,
+              "productId": "SYN-009",
+              "variantId": "SYN-009-V1",
+              "productName": "AMISTAR TOP 325 SC ",
+              "variantName": "AMISTAR TOP 325 SC  600 ML"
+            },
+            {
+              "unit": "330 ML",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/Untitled-1_0008_Axial-1L.jpg",
+              "price": 1650,
+              "expiry": "2026-01-05",
+              "batchId": "001",
+              "quantity": 3,
+              "productId": "SYN-006",
+              "variantId": "SYN-006-V2",
+              "productName": "AXIAL XL 050 EC",
+              "variantName": "AXIAL XL 050 EC 330 ML"
+            }
+          ],
+          "phone": "03029555755",
+          "total": 13750,
+          "status": "Completed",
+          "address": "Hudyara",
+          "payment": "Cash",
+          "customer": "Asad",
+          "discount": 0,
+          "subtotal": 13750,
+          "createdAt": "2026-03-12T09:48:49.929Z",
+          "updatedAt": "2026-03-12T09:48:49.929Z",
+          "cashAmount": 13750,
+          "creditAmount": 0
+        }
+      ],
+      "totalPurchases": 13750,
+      "purchaseCount": 1
+    },
+    {
+      "id": "03067777320",
+      "name": "husaan",
+      "phone": "03067777320",
+      "village": "N/A",
+      "creditLimit": 0,
+      "currentBalance": 15550,
+      "overdueAmount": 0,
+      "lastPayment": "2026-02-26T08:20:52.855Z",
+      "transactions": [
+        {
+          "id": "ORD-2026-889305",
+          "date": "2026-03-12T09:31:29.305Z",
+          "items": [
+            {
+              "unit": "800 ML",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/Untitled-1_0079_Dual-Gold-800ml.jpg",
+              "price": 2750,
+              "expiry": "2026-02-06",
+              "batchId": "001",
+              "quantity": 1,
+              "productId": "SYN-007",
+              "variantId": "SYN-007-V1",
+              "productName": "DUAL GOLD 960 EC ",
+              "variantName": "DUAL GOLD 960 EC  800 ML"
+            },
+            {
+              "unit": "1 L",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/ISABION-1-L-1.png",
+              "price": 3900,
+              "expiry": "2026-01-12",
+              "batchId": "001",
+              "quantity": 1,
+              "productId": "SYN-011",
+              "variantId": "SYN-011-V1",
+              "productName": "ISABION ",
+              "variantName": "ISABION  1 L"
+            }
+          ],
+          "phone": "03067777320",
+          "total": 6650,
+          "status": "Completed",
+          "address": "lhr",
+          "payment": "Credit",
+          "customer": "husaan",
+          "discount": 0,
+          "subtotal": 6650,
+          "createdAt": "2026-03-12T09:31:29.305Z",
+          "updatedAt": "2026-03-12T09:31:29.305Z",
+          "cashAmount": 0,
+          "creditAmount": 6650
+        },
+        {
+          "id": "ORD-2026-717862",
+          "date": "2026-03-12T09:28:37.862Z",
+          "items": [
+            {
+              "unit": "1 L",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/ISABION-1-L-1.png",
+              "price": 3900,
+              "expiry": "2026-01-12",
+              "batchId": "001",
+              "quantity": 4,
+              "productId": "SYN-011",
+              "variantId": "SYN-011-V1",
+              "productName": "ISABION ",
+              "variantName": "ISABION  1 L"
+            },
+            {
+              "unit": "330 ML",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/Untitled-1_0008_Axial-1L.jpg",
+              "price": 1650,
+              "expiry": "2026-01-05",
+              "batchId": "001",
+              "quantity": 3,
+              "productId": "SYN-006",
+              "variantId": "SYN-006-V2",
+              "productName": "AXIAL XL 050 EC",
+              "variantName": "AXIAL XL 050 EC 330 ML"
+            },
+            {
+              "unit": "500 ML",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/Untitled-1_0045_Politrin-C-1L.jpg",
+              "price": 2100,
+              "expiry": "2026-12-12",
+              "batchId": "001",
+              "quantity": 2,
+              "productId": "SYN-005",
+              "variantId": "SYN-005-V1",
+              "productName": " POLYTRIN C 440 EC ",
+              "variantName": " POLYTRIN C 440 EC  500 ML"
+            }
+          ],
+          "phone": "03067777320",
+          "total": 24750,
+          "status": "Completed",
+          "address": "lhr",
+          "payment": "Cash",
+          "customer": "husaan",
+          "discount": 0,
+          "subtotal": 24750,
+          "createdAt": "2026-03-12T09:28:37.862Z",
+          "updatedAt": "2026-03-12T09:28:37.862Z",
+          "cashAmount": 24750,
+          "creditAmount": 0
+        },
+        {
+          "id": "ORD-2026-979423",
+          "date": "2026-03-12T06:46:19.423Z",
+          "items": [
+            {
+              "unit": "1 L",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/ISABION-1-L-1.png",
+              "price": 3900,
+              "expiry": "2026-01-12",
+              "batchId": "001",
+              "quantity": 1,
+              "productId": "SYN-011",
+              "variantId": "SYN-011-V1",
+              "productName": "ISABION ",
+              "variantName": "ISABION  1 L"
+            },
+            {
+              "unit": "1 L",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/Titl-1L.png",
+              "price": 4800,
+              "expiry": "2027-01-01",
+              "batchId": "001",
+              "quantity": 1,
+              "productId": "SYN-010",
+              "variantId": "SYN-010-V1",
+              "productName": "TILT 250 EC ",
+              "variantName": "TILT 250 EC  1 L"
+            }
+          ],
+          "phone": "03067777320",
+          "total": 8700,
+          "status": "Completed",
+          "address": "Lahore",
+          "payment": "Cash",
+          "customer": "Hussain Omer",
+          "discount": 0,
+          "subtotal": 8700,
+          "createdAt": "2026-03-12T06:46:19.423Z",
+          "updatedAt": "2026-03-12T06:46:19.423Z",
+          "cashAmount": 8700,
+          "creditAmount": 0
+        },
+        {
+          "id": "ORD-2026-507596",
+          "date": "2026-03-05T09:38:27.596Z",
+          "items": [
+            {
+              "unit": "600 ML",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/Amistar-Top-600-ml-1.png",
+              "price": 4400,
+              "expiry": "2027-01-01",
+              "batchId": "001",
+              "quantity": 1,
+              "productId": "SYN-009",
+              "variantId": "SYN-009-V1",
+              "productName": "AMISTAR TOP 325 SC ",
+              "variantName": "AMISTAR TOP 325 SC  600 ML"
+            },
+            {
+              "unit": "1 L",
+              "image": "https://nayasavera.online/wp-content/uploads/2025/06/Untitled-1_0008_Axial-1L.jpg",
+              "price": 4700,
+              "expiry": "2027-05-08",
+              "batchId": "001",
+              "quantity": 1,
+              "productId": "SYN-006",
+              "variantId": "SYN-006-V1",
+              "productName": "AXIAL XL 050 EC",
+              "variantName": "AXIAL XL 050 EC 1 L"
+            },
+            {
