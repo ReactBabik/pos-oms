@@ -17,8 +17,6 @@ function figmaAssetResolver() {
 }
 
 export default defineConfig({
-  // Required for GitHub Pages project site: https://ReactBabik.github.io/pos-oms/
-  base: '/pos-oms/',
   plugins: [
     figmaAssetResolver(),
     // The React and Tailwind plugins are both required for Make, even if
