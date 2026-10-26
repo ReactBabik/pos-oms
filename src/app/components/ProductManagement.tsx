@@ -18,7 +18,9 @@ import {
   Save,
   RefreshCw,
   Upload,
-  Tag
+  Tag,
+  Sprout,
+  Star
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
@@ -26,6 +28,8 @@ import productImg1 from 'figma:asset/af1f57e40da11e117eb40a873e92e4e1383d482c.pn
 import productImg2 from 'figma:asset/79e9316f2141aad01fb899a670136c3e8e63b05b.png';
 import productImg3 from 'figma:asset/24bd79d11f624743962fb0e43db9b5538e21e2d3.png';
 import { CategoryManagement } from './CategoryManagement';
+import { CropManagement, CropTagInput } from './CropManagement';
+import { Switch } from './ui/switch';
 import {
   Select,
   SelectContent,
@@ -59,6 +63,8 @@ interface Product {
   category: string;
   image: string;
   variants?: ProductVariant[]; // Variants contain all the pricing and inventory info
+  featured?: boolean; // shown in the Featured section of the Online Store
+  crops?: string[]; // crop names from the crop master
   createdAt?: string;
   updatedAt?: string;
 }
@@ -73,13 +79,16 @@ export function ProductManagement() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [showCategoryManagement, setShowCategoryManagement] = useState(false);
+  const [showCropManagement, setShowCropManagement] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
   const [formData, setFormData] = useState<Product>({
     id: '',
     name: '',
     category: '',
     image: '',
-    variants: []
+    variants: [],
+    featured: false,
+    crops: []
   });
   const [batchForm, setBatchForm] = useState<Batch>({
     id: '',
@@ -224,6 +233,28 @@ export function ProductManagement() {
     }
   };
 
+  // Saves only the featured flag; the update endpoint merges it into the stored product.
+  const handleToggleFeatured = async (product: Product, featured: boolean) => {
+    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, featured } : p));
+    try {
+      const response = await fetch(`${API_URL}/products/${product.id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${publicAnonKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ featured })
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error);
+      toast.success(featured ? `${product.name} is featured on the Online Store` : `${product.name} removed from featured`);
+    } catch (error) {
+      console.error('Error updating featured flag:', error);
+      setProducts(prev => prev.map(p => p.id === product.id ? { ...p, featured: !featured } : p));
+      toast.error('Could not update featured status');
+    }
+  };
+
   const handleEditProduct = (product: Product) => {
     setEditingProduct(product);
     setFormData(product);
@@ -254,7 +285,9 @@ export function ProductManagement() {
       name: '',
       category: '',
       image: '',
-      variants: []
+      variants: [],
+      featured: false,
+      crops: []
     });
     setBatchForm({
       id: '',
@@ -574,7 +607,7 @@ export function ProductManagement() {
       </div>
 
       {/* Stats Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
@@ -619,6 +652,18 @@ export function ProductManagement() {
                 <p className="text-2xl font-bold">{uniqueCategories}</p>
               </div>
               <Package className="size-8 text-orange-600" />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-600">Featured on Store</p>
+                <p className="text-2xl font-bold">{products.filter(p => p.featured).length}</p>
+              </div>
+              <Star className="size-8 text-amber-500" />
             </div>
           </CardContent>
         </Card>
@@ -688,6 +733,14 @@ export function ProductManagement() {
             >
               <Tag className="size-4 lg:mr-2" />
               <span className="hidden lg:inline">Manage Categories</span>
+            </Button>
+            <Button
+              onClick={() => setShowCropManagement(true)}
+              variant="outline"
+              className="h-10 px-3 lg:px-4 border-gray-300 hover:border-[#C7359C] hover:text-[#C7359C] hover:bg-purple-50 transition-all"
+            >
+              <Sprout className="size-4 lg:mr-2" />
+              <span className="hidden lg:inline">Manage Crops</span>
             </Button>
             <Dialog open={showAddDialog} onOpenChange={(open) => {
               setShowAddDialog(open);
@@ -768,6 +821,28 @@ export function ProductManagement() {
                         )}
                       </div>
                     </div>
+
+                    {/* Crops */}
+                    <div className="space-y-2">
+                      <Label>Crops</Label>
+                      <CropTagInput
+                        value={formData.crops || []}
+                        onChange={(crops) => setFormData({ ...formData, crops })}
+                      />
+                      <p className="text-xs text-gray-500">Type to search crops, press Enter to add. New names are added to the crop list.</p>
+                    </div>
+
+                    {/* Featured */}
+                    <label className="flex items-center justify-between gap-4 border rounded-lg p-3 cursor-pointer">
+                      <div>
+                        <p className="text-sm font-medium flex items-center gap-2"><Star className="size-4 text-amber-500" /> Featured on Online Store</p>
+                        <p className="text-xs text-gray-500">Shows this product in the store's featured section</p>
+                      </div>
+                      <Switch
+                        checked={!!formData.featured}
+                        onCheckedChange={(featured) => setFormData({ ...formData, featured })}
+                      />
+                    </label>
 
                     {/* Variants Section */}
                     <Separator />
@@ -999,6 +1074,18 @@ export function ProductManagement() {
                               )}
                             </div>
                           )}
+                          {product.crops && product.crops.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {product.crops.slice(0, 3).map(crop => (
+                                <span key={crop} className="inline-flex items-center gap-1 rounded-full bg-green-50 border border-green-200 text-green-800 text-[11px] px-2 py-0.5">
+                                  <Sprout className="size-3" />{crop}
+                                </span>
+                              ))}
+                              {product.crops.length > 3 && (
+                                <span className="text-[11px] text-gray-500 px-1 py-0.5">+{product.crops.length - 3} more</span>
+                              )}
+                            </div>
+                          )}
                           <p className="text-xs text-gray-600 mt-2">
                             {product.variants?.length || 0} variant(s)
                           </p>
@@ -1007,6 +1094,16 @@ export function ProductManagement() {
                           </p>
                         </div>
                       </div>
+                      <label className="flex items-center justify-between mt-3 pt-3 border-t text-xs cursor-pointer">
+                        <span className={`flex items-center gap-1.5 font-medium ${product.featured ? 'text-amber-700' : 'text-gray-600'}`}>
+                          <Star className={`size-3.5 ${product.featured ? 'fill-amber-400 text-amber-500' : 'text-gray-400'}`} />
+                          Featured on Online Store
+                        </span>
+                        <Switch
+                          checked={!!product.featured}
+                          onCheckedChange={(featured) => handleToggleFeatured(product, featured)}
+                        />
+                      </label>
                       <div className="flex gap-2 mt-3">
                         <Button
                           variant="outline"
@@ -1041,6 +1138,11 @@ export function ProductManagement() {
         open={showCategoryManagement}
         onClose={() => setShowCategoryManagement(false)}
         onCategoriesUpdated={fetchCategories}
+      />
+
+      <CropManagement
+        open={showCropManagement}
+        onClose={() => setShowCropManagement(false)}
       />
     </div>
   );

@@ -14,12 +14,16 @@ import { CreditManagement } from './components/CreditManagement';
 import { LoyaltyModule } from './components/LoyaltyModule';
 import { FranchiseManagement } from './components/FranchiseManagement';
 import { OrderManagementSystem } from './components/OrderManagementSystem';
+import { ensureSampleFranchises } from './utils/sampleFranchises';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from './components/ui/sheet';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from './components/ui/dropdown-menu';
 import { Avatar, AvatarFallback, AvatarImage } from './components/ui/avatar';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import logo from 'figma:asset/398106a4d8b6ec3c2e6cc932aa53a5772540f723.png';
 import { AdminHome } from './components/AdminHome';
+
+// Prototype only: load sample franchises when no Franchise Master has been uploaded yet.
+ensureSampleFranchises();
 
 // Language context
 export type Language = 'en' | 'ur';
@@ -36,7 +40,7 @@ export const translations: Translations = {
     sales: 'Sales',
     customers: 'Customers',
     products: 'Products',
-    orders: 'Orders',
+    orders: 'Online Orders',
     credit: 'Credit',
     loyalty: 'Loyalty',
     franchises: 'Franchises',
@@ -56,7 +60,7 @@ export const translations: Translations = {
     sales: 'فروخت کی رپورٹ',
     customers: 'گاہک',
     products: 'مصنوعات',
-    orders: 'آرڈرز',
+    orders: 'آن لائن آرڈرز',
     credit: 'ادھار',
     loyalty: 'لائلٹی',
     franchises: 'فرنچائزز',

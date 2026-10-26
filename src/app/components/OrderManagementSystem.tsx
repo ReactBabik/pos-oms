@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ClipboardList, Plus, Search, Download, MoreVertical, Eye, Edit, Undo2, XCircle,
-  CheckCircle2, Clock, Building2, PackageCheck, AlertTriangle, Trash2, RefreshCw, X, RotateCcw, ChevronDown, BarChart3, List, Calendar,
+  CheckCircle2, Clock, Building2, PackageCheck, AlertTriangle, Trash2, RefreshCw, RotateCcw, ChevronDown, BarChart3, List, Calendar, Inbox, Zap,
 } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
@@ -9,6 +9,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { Checkbox } from './ui/checkbox';
+import { Switch } from './ui/switch';
 import { Textarea } from './ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -17,14 +18,16 @@ import { toast } from 'sonner';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import type { Language } from '../App';
 import { useFranchiseFilters } from '../utils/franchiseFilters';
+import { SYNC_KEY, resetSampleSyncTimes, sampleFranchise } from '../utils/sampleFranchises';
 
 const API_URL = `https://${projectId}.supabase.co/functions/v1/make-server-77be783d`;
-const STORAGE_KEY = 'omsOrders';
+const STORAGE_KEY = 'omsOrders_v2';
+const AUTO_ASSIGN_KEY = 'omsAutoAssignOnConfirm';
 const CURRENT_USER = 'Admin User';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Stage = 'pending' | 'confirmed' | 'assigned' | 'delivered' | 'cancelled';
+type Stage = 'pending' | 'confirmed' | 'unassigned' | 'assigned' | 'delivered' | 'cancelled';
 type ActiveStage = Exclude<Stage, 'cancelled'>;
 
 interface OrderItem {
@@ -55,6 +58,8 @@ interface Order {
   stage: Stage;
   cancelledFrom?: ActiveStage;
   cancelReason?: string;
+  unassignedReason?: string; // why auto-assignment could not place the order, or why it was taken off a franchise
+  assignedBy?: 'auto' | 'manual';
   franchiseKey?: string;
   franchiseName?: string;
   zone?: string;
@@ -64,8 +69,11 @@ interface Order {
   timeline: TimelineEvent[];
 }
 
-interface CatalogueItem { variantId: string; name: string; price: number; stock: number; }
+interface CatalogueItem { variantId: string; name: string; price: number; stock: number; crops?: string[]; }
 interface FranchiseOption { key: string; name: string; zone: string; region: string; salesUnit: string; }
+
+// Stages where an order still needs work. The in-process view shows these whatever their order date.
+const PROCESSING: Stage[] = ['pending', 'confirmed', 'unassigned', 'assigned'];
 
 type DateFilter = 'all' | 'today' | 'last7' | 'mtd' | 'ytd' | 'custom';
 const DATE_FILTERS: [DateFilter, string, string][] = [
@@ -81,11 +89,12 @@ type DialogState =
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const FLOW: ActiveStage[] = ['pending', 'confirmed', 'assigned', 'delivered'];
+const FLOW: ActiveStage[] = ['pending', 'confirmed', 'unassigned', 'assigned', 'delivered'];
 
 const STAGE_META: Record<Stage, { label: string; badge: string; icon: typeof Clock; hint: string }> = {
   pending:   { label: 'Pending',   badge: 'bg-amber-100 text-amber-800 border-amber-200',   icon: Clock,        hint: 'Awaiting confirmation' },
-  confirmed: { label: 'Confirmed', badge: 'bg-blue-100 text-blue-800 border-blue-200',      icon: CheckCircle2, hint: 'Unassigned queue' },
+  confirmed: { label: 'Confirmed', badge: 'bg-blue-100 text-blue-800 border-blue-200',      icon: CheckCircle2, hint: 'Awaiting auto-assign' },
+  unassigned:{ label: 'Unassigned',badge: 'bg-orange-100 text-orange-800 border-orange-200', icon: Inbox,       hint: 'Needs manual assign' },
   assigned:  { label: 'Assigned',  badge: 'bg-purple-100 text-purple-800 border-purple-200', icon: Building2,    hint: 'With franchise' },
   delivered: { label: 'Delivered', badge: 'bg-green-100 text-green-800 border-green-200',   icon: PackageCheck, hint: 'Completed' },
   cancelled: { label: 'Cancelled', badge: 'bg-red-100 text-red-800 border-red-200',         icon: XCircle,      hint: 'With reason' },
@@ -93,7 +102,8 @@ const STAGE_META: Record<Stage, { label: string; badge: string; icon: typeof Clo
 
 const NEXT_ACTION: Partial<Record<Stage, string>> = {
   pending: 'Confirm',
-  confirmed: 'Assign',
+  confirmed: 'Auto-assign',
+  unassigned: 'Assign',
   assigned: 'Mark Delivered',
 };
 
@@ -152,66 +162,174 @@ const FALLBACK_CATALOGUE: CatalogueItem[] = [
   { variantId: '', name: 'Sample Seed Pack 2kg', price: 5600, stock: 0 },
 ];
 
-const SAMPLE_CUSTOMERS: [string, string, string, string][] = [
-  ['Muhammad Aslam', '0300-0000101', 'Chak 12, Near Canal Road', 'Sahiwal'],
-  ['Ghulam Rasool', '0301-0000102', 'Mouza Kot Addu, Main Bazar', 'Muzaffargarh'],
-  ['Rana Shahid', '0302-0000103', 'Street 4, Model Town', 'Okara'],
-  ['Imran Chaudhry', '0303-0000104', 'Chak 88 JB', 'Faisalabad'],
-  ['Abdul Ghaffar', '0304-0000105', 'Basti Malook, Multan Road', 'Multan'],
-  ['Zafar Iqbal', '0305-0000106', 'Village Jhok Sial', 'Vehari'],
-  ['Naveed Akhtar', '0306-0000107', 'Chak 45 SB', 'Sargodha'],
-  ['Khalid Mehmood', '0307-0000108', 'Adda Pul Bagar', 'Bahawalpur'],
-  ['Tariq Hussain', '0308-0000109', 'Mohalla Islamabad, GT Road', 'Gujranwala'],
-  ['Sajid Ali', '0309-0000110', 'Chak 7 Faiz', 'Rahim Yar Khan'],
-  ['Farooq Ahmad', '0310-0000111', 'Village Dera Rahim', 'Sahiwal'],
-  ['Waseem Abbas', '0311-0000112', 'Chak 130 EB', 'Vehari'],
-  ['Asif Javed', '0312-0000113', 'Main Road, Mian Channu', 'Khanewal'],
-  ['Bilal Tariq', '0313-0000114', 'Chak 9 Pull', 'Okara'],
+// ── Auto-assignment ──────────────────────────────────────────────────────────
+
+// A franchise that has not synced for this long is treated as offline and skipped.
+const OFFLINE_AFTER_MINUTES = 3 * 24 * 60;
+
+type AutoAssignResult = { franchise: FranchiseOption; note: string } | { reason: string };
+
+// Stand-in rule until polygon / nearest-location rules exist: the order's city is matched against each
+// franchise's district, tehsil and village names. Inactive and offline franchises are skipped, and the
+// most recently synced match wins.
+function autoAssign(city: string): AutoAssignResult {
+  let rows: any[] = [];
+  try { rows = JSON.parse(localStorage.getItem('franchiseMaster') || '[]'); } catch { /* treat as no franchises */ }
+  const target = city.trim().toLowerCase();
+  const byKey = new Map<string, any>();
+  rows.filter(r => [r.district, r.tehsil, r.villageName].some(v => v && String(v).trim().toLowerCase() === target))
+    .forEach(r => { const key = r.associatedFranchiseId || r.franchiseName; if (!byKey.has(key)) byKey.set(key, { ...r, key }); });
+  const matches = Array.from(byKey.values());
+  if (matches.length === 0) return { reason: `No franchise covers ${city}` };
+
+  const active = matches.filter(r => (r.franchiseStatus || '').toLowerCase() !== 'inactive');
+  if (active.length === 0) return { reason: `${matches.map(r => r.franchiseName).join(', ')} ${matches.length === 1 ? 'is' : 'are'} inactive` };
+
+  const minutesSince = (key: string) => (Date.now() - new Date(getLastSync(key)).getTime()) / 60_000;
+  const online = active.filter(r => minutesSince(r.key) < OFFLINE_AFTER_MINUTES);
+  if (online.length === 0) {
+    return { reason: active.map(r => `${r.franchiseName} is offline (last synced ${syncStatus(getLastSync(r.key)).label})`).join('; ') };
+  }
+  const best = online.sort((a, b) => minutesSince(a.key) - minutesSince(b.key))[0];
+  return {
+    franchise: { key: best.key, name: best.franchiseName, zone: best.zone || '', region: best.region || '', salesUnit: best.salesUnit || '' },
+    note: `Matched by city: ${city}`,
+  };
+}
+
+// ── Sample orders ────────────────────────────────────────────────────────────
+
+type StockKind = 'in' | 'out' | 'low' | 'any';
+type SampleStep =
+  | { do: 'confirm'; note?: string }
+  | { do: 'auto'; key: string }
+  | { do: 'autoFail'; reason: string }
+  | { do: 'assign'; key: string }
+  | { do: 'reassign'; key: string; reason: string }
+  | { do: 'unassign'; reason: string }
+  | { do: 'edit'; reason: string; delivery: number }
+  | { do: 'deliver' }
+  | { do: 'cancel'; reason: string }
+  | { do: 'restore'; reason: string };
+
+interface SampleOrder {
+  customer: [string, string, string, string]; // name, phone, address, city
+  hoursAgo: number;
+  source?: 'Manual';
+  items: [StockKind, number][];
+  steps: SampleStep[];
+}
+
+const AUTO_OFF = 'Auto-assign on confirm was switched off';
+
+// Each sample shows one situation the admin will meet. Ages spread across today, this week, this month,
+// this year and last year so every date filter has something to show.
+const SAMPLE_ORDERS: SampleOrder[] = [
+  // Pending
+  { customer: ['Muhammad Aslam', '0300-0000101', 'Chak 12, Near Canal Road', 'Sahiwal'], hoursAgo: 2, items: [['in', 2]], steps: [] },
+  { customer: ['Hamza Raza', '0314-0000115', 'Shop 3, Ferozepur Road', 'Lahore'], hoursAgo: 1, source: 'Manual', items: [['in', 1], ['any', 1]], steps: [] },
+  { customer: ['Imran Chaudhry', '0303-0000104', 'Chak 88 JB', 'Faisalabad'], hoursAgo: 50, items: [['any', 3]], steps: [] },
+  // Confirmed, waiting for auto-assignment
+  { customer: ['Rana Shahid', '0302-0000103', 'Street 4, Model Town', 'Okara'], hoursAgo: 26, items: [['in', 1]], steps: [{ do: 'confirm', note: AUTO_OFF }] },
+  { customer: ['Tariq Hussain', '0308-0000109', 'Mohalla Islamabad, GT Road', 'Gujranwala'], hoursAgo: 70, items: [['any', 2], ['any', 1]], steps: [{ do: 'confirm', note: AUTO_OFF }] },
+  // Unassigned: each reason auto-assignment can fail, plus an order taken off its franchise
+  { customer: ['Ghulam Rasool', '0301-0000102', 'Mouza Kot Addu, Main Bazar', 'Muzaffargarh'], hoursAgo: 20, items: [['any', 2]], steps: [{ do: 'confirm' }, { do: 'autoFail', reason: 'No franchise covers Muzaffargarh' }] },
+  { customer: ['Asif Javed', '0312-0000113', 'Main Road, Mian Channu', 'Khanewal'], hoursAgo: 44, items: [['in', 1]], steps: [{ do: 'confirm' }, { do: 'autoFail', reason: 'Naya Savera Khanewal is offline (last synced 4 days ago)' }] },
+  { customer: ['Khalid Mehmood', '0307-0000108', 'Adda Pul Bagar', 'Bahawalpur'], hoursAgo: 90, items: [['any', 1]], steps: [{ do: 'confirm' }, { do: 'autoFail', reason: 'Naya Savera Bahawalpur is inactive' }] },
+  { customer: ['Abdul Ghaffar', '0304-0000105', 'Basti Malook, Multan Road', 'Multan'], hoursAgo: 120, items: [['in', 2]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-105' }, { do: 'unassign', reason: 'Franchise could not fulfil' }] },
+  // Assigned: every sync state, stock in / short / out, manual, reassigned, edited and restored orders
+  { customer: ['Farooq Ahmad', '0310-0000111', 'Village Dera Rahim', 'Sahiwal'], hoursAgo: 5, items: [['in', 1], ['in', 2]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-101' }] },
+  { customer: ['Bilal Tariq', '0313-0000114', 'Chak 9 Pull', 'Okara'], hoursAgo: 30, items: [['out', 2]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-102' }] },
+  { customer: ['Shahbaz Anjum', '0315-0000116', 'Chak 204 RB', 'Faisalabad'], hoursAgo: 60, items: [['low', 3]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-103' }] },
+  { customer: ['Naveed Akhtar', '0306-0000107', 'Chak 45 SB', 'Sargodha'], hoursAgo: 75, items: [['in', 1]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-104' }] },
+  { customer: ['Mazhar Iqbal', '0316-0000117', 'Bosan Road', 'Multan'], hoursAgo: 100, items: [['in', 2]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-105' }, { do: 'edit', reason: 'Delivery charges changed', delivery: 400 }] },
+  { customer: ['Sajid Ali', '0309-0000110', 'Chak 7 Faiz', 'Rahim Yar Khan'], hoursAgo: 140, items: [['in', 1]], steps: [{ do: 'confirm' }, { do: 'autoFail', reason: 'No franchise covers Rahim Yar Khan' }, { do: 'assign', key: 'FR-107' }] },
+  { customer: ['Nadeem Shah', '0317-0000118', 'Chak 99 NB', 'Sargodha'], hoursAgo: 160, items: [['any', 2]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-104' }, { do: 'reassign', key: 'FR-103', reason: 'Franchise could not fulfil' }] },
+  { customer: ['Usman Ghani', '0318-0000119', 'Satellite Town', 'Gujranwala'], hoursAgo: 180, items: [['in', 1]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-109' }, { do: 'cancel', reason: 'Customer requested cancellation' }, { do: 'restore', reason: 'Customer changed request' }] },
+  { customer: ['Iftikhar Ahmed', '0319-0000120', 'Mian Channu Bypass', 'Khanewal'], hoursAgo: 200, items: [['in', 1]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-106' }] },
+  // Delivered
+  { customer: ['Zafar Iqbal', '0305-0000106', 'Village Jhok Sial', 'Vehari'], hoursAgo: 240, items: [['in', 1], ['any', 1]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-107' }, { do: 'deliver' }] },
+  { customer: ['Hamid Khan', '0321-0000122', 'Shujabad Road', 'Multan'], hoursAgo: 360, source: 'Manual', items: [['in', 1], ['any', 2]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-105' }, { do: 'deliver' }] },
+  { customer: ['Rizwan Haider', '0320-0000121', 'Chak 5/11L', 'Sahiwal'], hoursAgo: 600, items: [['any', 2]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-101' }, { do: 'deliver' }] },
+  { customer: ['Akram Bhatti', '0322-0000123', 'Chak 61 JB', 'Faisalabad'], hoursAgo: 7200, items: [['any', 1]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-103' }, { do: 'deliver' }] },
+  // Cancelled from each stage it can be cancelled from
+  { customer: ['Waseem Abbas', '0311-0000112', 'Chak 130 EB', 'Vehari'], hoursAgo: 150, items: [['any', 1]], steps: [{ do: 'cancel', reason: 'Customer unreachable' }] },
+  { customer: ['Pervaiz Akhtar', '0325-0000126', 'Kot Momin', 'Sargodha'], hoursAgo: 110, items: [['any', 1]], steps: [{ do: 'confirm', note: AUTO_OFF }, { do: 'cancel', reason: 'Duplicate order' }] },
+  { customer: ['Shakeel Ahmad', '0323-0000124', 'Jamal Din Wali', 'Rahim Yar Khan'], hoursAgo: 220, items: [['any', 2]], steps: [{ do: 'confirm' }, { do: 'autoFail', reason: 'No franchise covers Rahim Yar Khan' }, { do: 'cancel', reason: 'Outside delivery area' }] },
+  { customer: ['Kashif Mehmood', '0324-0000125', 'Renala Khurd', 'Okara'], hoursAgo: 960, items: [['out', 1]], steps: [{ do: 'confirm' }, { do: 'auto', key: 'FR-102' }, { do: 'cancel', reason: 'Out of stock' }] },
 ];
 
-const SAMPLE_STAGES: Stage[] = [
-  'pending', 'pending', 'pending', 'pending', 'confirmed', 'confirmed', 'confirmed',
-  'assigned', 'assigned', 'assigned', 'delivered', 'delivered', 'delivered', 'cancelled',
-];
+const NO_FRANCHISE = { franchiseKey: undefined, franchiseName: undefined, zone: undefined, region: undefined, salesUnit: undefined, stockConfirmed: undefined, assignedBy: undefined };
+const franchiseFields = (f: FranchiseOption, by: 'auto' | 'manual') => ({
+  franchiseKey: f.key, franchiseName: f.name, zone: f.zone, region: f.region, salesUnit: f.salesUnit,
+  assignedBy: by, stockConfirmed: by === 'manual', unassignedReason: undefined,
+});
 
-function seedOrders(catalogue: CatalogueItem[], franchises: FranchiseOption[]): Order[] {
+function applySampleStep(o: Order, step: SampleStep, at: string): Order {
+  const log = (action: string, note?: string) => [...o.timeline, event(action, note, at)];
+  switch (step.do) {
+    case 'confirm':
+      return { ...o, stage: 'confirmed', timeline: log('Confirmed', step.note) };
+    case 'auto': {
+      const f = sampleFranchise(step.key);
+      return { ...o, ...franchiseFields(f, 'auto'), stage: 'assigned', timeline: [...o.timeline, event(`Auto-assigned to ${f.name}`, `Matched by city: ${o.city}`, at, 'System')] };
+    }
+    case 'autoFail':
+      return { ...o, stage: 'unassigned', unassignedReason: step.reason, timeline: [...o.timeline, event('Moved to Unassigned', step.reason, at, 'System')] };
+    case 'assign': {
+      const f = sampleFranchise(step.key);
+      return { ...o, ...franchiseFields(f, 'manual'), stage: 'assigned', timeline: log(`Assigned to ${f.name}`, 'Manual assignment. Stock confirmed with franchise') };
+    }
+    case 'reassign': {
+      const f = sampleFranchise(step.key);
+      return { ...o, ...franchiseFields(f, 'manual'), timeline: log(`Reassigned from ${o.franchiseName} to ${f.name}`, `${step.reason}. Stock confirmed with franchise`) };
+    }
+    case 'unassign':
+      return { ...o, ...NO_FRANCHISE, stage: 'unassigned', unassignedReason: `Removed from ${o.franchiseName}: ${step.reason}`, timeline: log('Reverted from Assigned to Unassigned', step.reason) };
+    case 'edit': {
+      const next = { ...o, deliveryCharges: step.delivery };
+      return { ...next, timeline: log('Order edited', `${step.reason}. Total ${money(totalOf(o))} → ${money(totalOf(next))}`) };
+    }
+    case 'deliver':
+      return { ...o, stage: 'delivered', timeline: log('Delivered') };
+    case 'cancel':
+      return { ...o, stage: 'cancelled', cancelledFrom: o.stage as ActiveStage, cancelReason: step.reason, timeline: log(`Cancelled from ${STAGE_META[o.stage].label}`, step.reason) };
+    case 'restore': {
+      const back = o.cancelledFrom ?? 'pending';
+      return { ...o, stage: back, cancelledFrom: undefined, cancelReason: undefined, timeline: log(`Restored to ${STAGE_META[back].label}`, step.reason) };
+    }
+  }
+}
+
+function seedOrders(catalogue: CatalogueItem[]): Order[] {
   const products = catalogue.length ? catalogue : FALLBACK_CATALOGUE;
-  const hour = 3600_000;
-  return SAMPLE_CUSTOMERS.map(([customerName, phone, address, city], i) => {
-    const created = Date.now() - (SAMPLE_CUSTOMERS.length - i) * 5 * hour;
-    const at = (h: number) => new Date(created + h * hour).toISOString();
-    const items: OrderItem[] = [0, 1].slice(0, (i % 2) + 1).map(n => {
-      const p = products[(i * 3 + n * 2) % products.length];
-      return { variantId: p.variantId, name: p.name, price: p.price, qty: (i % 3) + 1 };
-    });
-    // Assigned and delivered samples need a franchise; without a franchise master they stay in the unassigned queue.
-    let stage = SAMPLE_STAGES[i];
-    const franchise = franchises.length ? franchises[i % franchises.length] : undefined;
-    if ((stage === 'assigned' || stage === 'delivered') && !franchise) stage = 'confirmed';
-
-    const timeline: TimelineEvent[] = [event('Order received from e-commerce', undefined, at(0), 'System')];
-    const order: Order = {
-      id: `ORD-${1001 + i}`, source: 'E-commerce', createdAt: at(0),
-      customerName, phone, address, city,
-      paymentMethod: 'COD',
-      items, deliveryCharges: 250, stage, timeline,
+  const turn: Record<StockKind, number> = { in: 0, out: 0, low: 0, any: 0 };
+  const pick = (kind: StockKind, qty: number): OrderItem => {
+    const fits = (c: CatalogueItem) =>
+      kind === 'in' ? c.stock >= qty + 2 : kind === 'out' ? c.stock === 0 : kind === 'low' ? c.stock > 0 && c.stock < qty : true;
+    // Typical retail prices only, so a one-off item like farm machinery doesn't skew the sample totals.
+    const typical = products.filter(c => c.price >= 300 && c.price <= 15000);
+    const base = typical.length ? typical : products;
+    const pool = catalogue.length ? base.filter(fits) : [];
+    const list = pool.length ? pool : base;
+    const p = list[turn[kind]++ % list.length];
+    return { variantId: p.variantId, name: p.name, price: p.price, qty };
+  };
+  // Oldest first so order numbers rise with order date.
+  return [...SAMPLE_ORDERS].sort((a, b) => b.hoursAgo - a.hoursAgo).map((sample, i) => {
+    const [customerName, phone, address, city] = sample.customer;
+    const createdMs = Date.now() - sample.hoursAgo * 3600_000;
+    const createdAt = new Date(createdMs).toISOString();
+    const gap = (sample.hoursAgo * 3600_000) / (sample.steps.length + 1);
+    const start: Order = {
+      id: `ORD-${1001 + i}`, source: sample.source ?? 'E-commerce', createdAt,
+      customerName, phone, address, city, paymentMethod: 'COD',
+      items: sample.items.map(([kind, qty]) => pick(kind, qty)), deliveryCharges: 250, stage: 'pending',
+      timeline: [sample.source === 'Manual'
+        ? event('Order created manually', undefined, createdAt)
+        : event('Order received from e-commerce', undefined, createdAt, 'System')],
     };
-    if (stage === 'cancelled') {
-      order.cancelledFrom = 'pending';
-      order.cancelReason = 'Customer unreachable';
-      timeline.push(event('Cancelled', 'Customer unreachable', at(2)));
-      return order;
-    }
-    if (stage !== 'pending') timeline.push(event('Confirmed', undefined, at(1)));
-    if ((stage === 'assigned' || stage === 'delivered') && franchise) {
-      Object.assign(order, {
-        franchiseKey: franchise.key, franchiseName: franchise.name,
-        zone: franchise.zone, region: franchise.region, salesUnit: franchise.salesUnit, stockConfirmed: true,
-      });
-      timeline.push(event(`Assigned to ${franchise.name}`, 'Stock confirmed with franchise', at(2)));
-    }
-    if (stage === 'delivered') timeline.push(event('Delivered', undefined, at(4)));
-    return order;
+    return sample.steps.reduce((o, step, k) => applySampleStep(o, step, new Date(createdMs + gap * (k + 1)).toISOString()), start);
   });
 }
 
@@ -229,7 +347,8 @@ function stageReachedAt(o: Order, stage: Stage): string {
   if (FLOW.indexOf(current) < FLOW.indexOf(stage)) return '';
   const at = stage === 'pending' ? o.createdAt
     : stage === 'confirmed' ? lastEvent('Confirmed')
-    : stage === 'assigned' ? lastEvent('Assigned to', 'Reassigned')
+    : stage === 'unassigned' ? lastEvent('Moved to Unassigned', 'Reverted from Assigned to Unassigned')
+    : stage === 'assigned' ? lastEvent('Assigned to', 'Auto-assigned to', 'Reassigned')
     : lastEvent('Delivered');
   return at ? fmtDate(at) : '';
 }
@@ -243,6 +362,46 @@ function downloadCSV(filename: string, rows: (string | number)[][]) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// Stock is checked against the assigned franchise, so it only means something once an order is assigned.
+const showsStock = (o: Pick<Order, 'stage'>) => o.stage === 'assigned';
+
+// When the franchise POS last synced. Placeholder until the POS sync API exists: sample franchises get
+// set times (see utils/sampleFranchises); any other franchise gets a sample time the first time it is seen.
+// Times are stored so they age naturally between visits.
+function getLastSync(franchiseKey: string): string {
+  let map: Record<string, string> = {};
+  try { map = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { /* start fresh */ }
+  if (!map[franchiseKey]) {
+    const hash = [...franchiseKey].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+    const minutesAgo = [3, 8, 45, 150, 420, 1500, 2900, 5200][hash % 8];
+    map[franchiseKey] = new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    try { localStorage.setItem(SYNC_KEY, JSON.stringify(map)); } catch { /* keep in-memory value only */ }
+  }
+  return map[franchiseKey];
+}
+
+function syncStatus(iso: string): { label: string; tone: 'ok' | 'neutral' | 'warn' | 'bad' } {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (mins < 15) return { label: 'Online now', tone: 'ok' };
+  if (mins < 60) return { label: `${mins} min ago`, tone: 'neutral' };
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return { label: `${hours} hr ago`, tone: 'neutral' };
+  const days = Math.round(hours / 24);
+  return { label: `${days} day${days === 1 ? '' : 's'} ago`, tone: days >= 3 ? 'bad' : 'warn' };
+}
+
+function LastSync({ franchiseKey }: { franchiseKey: string }) {
+  const iso = getLastSync(franchiseKey);
+  const st = syncStatus(iso);
+  const dot = { ok: 'bg-green-500', neutral: 'bg-gray-400', warn: 'bg-amber-500', bad: 'bg-red-500' }[st.tone];
+  const text = { ok: 'text-green-700', neutral: 'text-gray-700', warn: 'text-amber-700', bad: 'text-red-700' }[st.tone];
+  return (
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap ${text}`} title={`Last synced ${fmtDate(iso)}`}>
+      <span className={`size-2 rounded-full ${dot}`} /> {st.label}
+    </span>
+  );
 }
 
 function csvCell(v: string | number) {
@@ -292,13 +451,20 @@ export function OrderManagementSystem({ language }: { language: Language }) {
 
   const [stageFilter, setStageFilter] = useState<Stage | 'all'>('all');
   const [search, setSearch] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  const [inProcessOnly, setInProcessOnly] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dialog, setDialog] = useState<DialogState>(null);
   const [view, setView] = useState<'orders' | 'analytics'>('orders');
+  const [autoAssignOn, setAutoAssignOn] = useState(() => {
+    try { return localStorage.getItem(AUTO_ASSIGN_KEY) !== 'off'; } catch { return true; }
+  });
+  const toggleAutoAssign = (on: boolean) => {
+    setAutoAssignOn(on);
+    try { localStorage.setItem(AUTO_ASSIGN_KEY, on ? 'on' : 'off'); } catch { /* setting lasts for this visit only */ }
+  };
 
   const persist = (next: Order[]) => {
     setOrders(next);
@@ -318,6 +484,7 @@ export function OrderManagementSystem({ language }: { language: Language }) {
         items = (data.products || []).flatMap((p: any) =>
           (p.variants || []).map((v: any) => ({
             variantId: v.id,
+            crops: p.crops || [],
             name: `${p.name} ${v.name}`.trim(),
             price: v.price || v.batches?.[0]?.price || 0,
             // Inventory can carry negative balances; for availability that means none on hand.
@@ -329,7 +496,7 @@ export function OrderManagementSystem({ language }: { language: Language }) {
       }
       setCatalogue(items);
       setCatalogueLoaded(true);
-      if (loadOrders() === null) persist(seedOrders(items, franchises));
+      if (loadOrders() === null) persist(seedOrders(items));
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -368,10 +535,50 @@ export function OrderManagementSystem({ language }: { language: Language }) {
     else toast.success(`${applied} order${applied !== 1 ? 's' : ''} ${verb}${skipped ? `, ${skipped} skipped` : ''}`);
   };
 
+  // Runs the assignment rules on one order: Assigned if a franchise matches, otherwise Unassigned with the reason.
+  const runAutoAssign = (o: Order): Order => {
+    const result = autoAssign(o.city);
+    if ('franchise' in result) {
+      return { ...o, ...franchiseFields(result.franchise, 'auto'), stage: 'assigned',
+        timeline: [...o.timeline, event(`Auto-assigned to ${result.franchise.name}`, result.note, undefined, 'System')] };
+    }
+    return { ...o, stage: 'unassigned', unassignedReason: result.reason,
+      timeline: [...o.timeline, event('Moved to Unassigned', result.reason, undefined, 'System')] };
+  };
+
+  const reportAutoAssign = (verb: string, before: Order[], ids: string[]) => {
+    const after = new Map(before.map(o => [o.id, o]));
+    const changed = ids.map(id => after.get(id)).filter(Boolean) as Order[];
+    const assigned = changed.filter(o => o.stage === 'assigned').length;
+    const unassigned = changed.filter(o => o.stage === 'unassigned').length;
+    const skipped = ids.length - changed.length;
+    if (changed.length === 0) { toast.error(`No orders could be ${verb} from their current stage`); return; }
+    toast.success(`${changed.length} order${changed.length !== 1 ? 's' : ''} ${verb}: ${assigned} auto-assigned, ${unassigned} moved to Unassigned${skipped ? `, ${skipped} skipped` : ''}`);
+  };
+
   const confirmOrders = (ids: string[]) => {
-    const n = applyTo(ids, o => o.stage !== 'pending' ? null
-      : { ...o, stage: 'confirmed', timeline: [...o.timeline, event('Confirmed')] });
-    report('confirmed', n, ids.length);
+    const changed: Order[] = [];
+    applyTo(ids, o => {
+      if (o.stage !== 'pending') return null;
+      const confirmed: Order = { ...o, stage: 'confirmed', timeline: [...o.timeline, event('Confirmed', autoAssignOn ? undefined : AUTO_OFF)] };
+      const next = autoAssignOn ? runAutoAssign(confirmed) : confirmed;
+      changed.push(next);
+      return next;
+    });
+    if (autoAssignOn) reportAutoAssign('confirmed', changed, ids);
+    else report('confirmed', changed.length, ids.length);
+  };
+
+  // Confirmed orders waiting for the rules, or Unassigned orders being retried.
+  const autoAssignOrders = (ids: string[]) => {
+    const changed: Order[] = [];
+    applyTo(ids, o => {
+      if (o.stage !== 'confirmed' && o.stage !== 'unassigned') return null;
+      const next = runAutoAssign(o);
+      changed.push(next);
+      return next;
+    });
+    reportAutoAssign('processed', changed, ids);
   };
 
   const deliverOrders = (ids: string[]) => {
@@ -383,12 +590,11 @@ export function OrderManagementSystem({ language }: { language: Language }) {
   const assignOrders = (ids: string[], f: FranchiseOption) => {
     const n = applyTo(ids, o => {
       // Reassigning an already-assigned order is a single-order action only.
-      if (o.stage !== 'confirmed' && !(ids.length === 1 && o.stage === 'assigned')) return null;
+      if (o.stage !== 'confirmed' && o.stage !== 'unassigned' && !(ids.length === 1 && o.stage === 'assigned')) return null;
       const action = o.stage === 'assigned' ? `Reassigned from ${o.franchiseName} to ${f.name}` : `Assigned to ${f.name}`;
       return {
-        ...o, stage: 'assigned', franchiseKey: f.key, franchiseName: f.name,
-        zone: f.zone, region: f.region, salesUnit: f.salesUnit, stockConfirmed: true,
-        timeline: [...o.timeline, event(action, 'Stock confirmed with franchise')],
+        ...o, ...franchiseFields(f, 'manual'), stage: 'assigned',
+        timeline: [...o.timeline, event(action, 'Manual assignment. Stock confirmed with franchise')],
       };
     });
     report('assigned', n, ids.length);
@@ -413,9 +619,9 @@ export function OrderManagementSystem({ language }: { language: Language }) {
         };
       }
       const back = FLOW[FLOW.indexOf(o.stage) - 1];
-      const cleared = back === 'confirmed'
-        ? { franchiseKey: undefined, franchiseName: undefined, zone: undefined, region: undefined, salesUnit: undefined, stockConfirmed: undefined }
-        : {};
+      const cleared = o.stage === 'assigned'
+        ? { ...NO_FRANCHISE, unassignedReason: `Removed from ${o.franchiseName}: ${reason}` }
+        : o.stage === 'unassigned' ? { unassignedReason: undefined } : {};
       return {
         ...o, ...cleared, stage: back,
         timeline: [...o.timeline, event(`Reverted from ${STAGE_META[o.stage].label} to ${STAGE_META[back].label}`, reason)],
@@ -426,13 +632,15 @@ export function OrderManagementSystem({ language }: { language: Language }) {
 
   const advance = (o: Order) => {
     if (o.stage === 'pending') confirmOrders([o.id]);
-    else if (o.stage === 'confirmed') setDialog({ type: 'assign', ids: [o.id] });
+    else if (o.stage === 'confirmed') autoAssignOrders([o.id]);
+    else if (o.stage === 'unassigned') setDialog({ type: 'assign', ids: [o.id] });
     else if (o.stage === 'assigned') deliverOrders([o.id]);
   };
 
   const resetSamples = () => {
     if (!window.confirm('Replace all current orders with fresh sample orders?')) return;
-    persist(seedOrders(catalogue, franchises));
+    resetSampleSyncTimes();
+    persist(seedOrders(catalogue));
     setSelected(new Set());
     toast.success('Sample orders reset');
   };
@@ -457,17 +665,20 @@ export function OrderManagementSystem({ language }: { language: Language }) {
     const ff = franchiseFilters;
     return orders.filter(o => {
       if (q && ![o.id, o.customerName, o.phone, o.city, o.franchiseName || ''].some(v => v.toLowerCase().includes(q))) return false;
-      if (sourceFilter !== 'all' && o.source !== sourceFilter) return false;
       const created = new Date(o.createdAt);
-      if (from && created < from) return false;
-      if (to && created > to) return false;
+      if (inProcessOnly) {
+        if (!PROCESSING.includes(o.stage)) return false;
+      } else {
+        if (from && created < from) return false;
+        if (to && created > to) return false;
+      }
       if (ff.zoneFilter !== 'all' && o.zone !== ff.zoneFilter) return false;
       if (ff.regionFilter !== 'all' && o.region !== ff.regionFilter) return false;
       if (ff.salesUnitFilter !== 'all' && o.salesUnit !== ff.salesUnitFilter) return false;
       if (ff.franchiseFilter !== 'all' && o.franchiseName !== ff.franchiseFilter) return false;
       return true;
     }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }, [orders, search, sourceFilter, dateFilter, dateFrom, dateTo,
+  }, [orders, search, dateFilter, dateFrom, dateTo, inProcessOnly,
       franchiseFilters.zoneFilter, franchiseFilters.regionFilter, franchiseFilters.salesUnitFilter, franchiseFilters.franchiseFilter]);
 
   const filtered = stageFilter === 'all' ? baseFiltered : baseFiltered.filter(o => o.stage === stageFilter);
@@ -482,12 +693,7 @@ export function OrderManagementSystem({ language }: { language: Language }) {
     return next;
   });
 
-  const hasFilters = !!search || sourceFilter !== 'all' || dateFilter !== 'all'
-    || stageFilter !== 'all' || franchiseFilters.hasActiveFranchiseFilter;
-  const clearFilters = () => {
-    setSearch(''); setSourceFilter('all'); setDateFilter('all'); setDateFrom(''); setDateTo('');
-    setStageFilter('all'); franchiseFilters.clearFranchiseFilters();
-  };
+  const hasFilters = !!search || dateFilter !== 'all' || inProcessOnly || franchiseFilters.hasActiveFranchiseFilter;
 
   const exportCSV = () => {
     const headers = ['Order ID', 'Date', 'Source', 'Stage', 'Customer', 'Phone', 'Address', 'City', 'Items',
@@ -505,14 +711,14 @@ export function OrderManagementSystem({ language }: { language: Language }) {
   // One row per product line, with every order-level field repeated on each line.
   const exportDetailedCSV = () => {
     const headers = [
-      'Order ID', 'Order Date', 'Source', 'Stage', 'Cancelled From', 'Cancel Reason',
+      'Order ID', 'Order Date', 'Source', 'Stage', 'Cancelled From', 'Cancel Reason', 'Unassigned Reason', 'Assignment Method',
       'Customer', 'Customer Phone', 'Delivery Address', 'City', 'Payment',
-      'Franchise ID', 'Franchise', 'Franchise Owner', 'Franchise Phone', 'Franchise Email', 'Franchise Address', 'Franchise Status',
+      'Franchise ID', 'Franchise', 'Franchise Owner', 'Franchise Phone', 'Franchise Email', 'Franchise Address', 'Franchise Status', 'Franchise Last Synced',
       'Province', 'Zone', 'Region', 'District', 'Tehsil', 'Sales Unit',
       'BSA ID', 'BSA Name', 'BSA Info 1', 'BSA Info 2', 'BSA Info 3', 'Villages Served', 'Stock Confirmed',
       'Line No', 'Product', 'Product ID', 'Qty', 'Unit Price', 'Line Amount',
       'Order Units', 'Order Subtotal', 'Delivery Charges', 'Order Total',
-      'Confirmed At', 'Assigned At', 'Delivered At', 'Cancelled At',
+      'Confirmed At', 'Unassigned At', 'Assigned At', 'Delivered At', 'Cancelled At',
       'Last Updated', 'Last Updated By', 'Timeline',
     ];
     // Franchise details beyond what the order stores come from the Franchise Master (one row per village).
@@ -529,15 +735,17 @@ export function OrderManagementSystem({ language }: { language: Language }) {
       return o.items.map((i, n) => [
         o.id, fmtDate(o.createdAt), o.source, STAGE_META[o.stage].label,
         o.cancelledFrom ? STAGE_META[o.cancelledFrom].label : '', o.cancelReason || '',
+        o.unassignedReason || '', o.assignedBy === 'auto' ? 'Auto' : o.assignedBy === 'manual' ? 'Manual' : '',
         o.customerName, o.phone, o.address, o.city, o.paymentMethod,
         o.franchiseKey || '', o.franchiseName || '', f.franchiseOwnerName || '', f.franchisePhone || '',
         f.franchiseEmail || '', f.franchiseAddress || '', f.franchiseStatus || '',
+        o.franchiseKey ? fmtDate(getLastSync(o.franchiseKey)) : '',
         f.province || '', o.zone || '', o.region || '', f.district || '', f.tehsil || '', o.salesUnit || '',
         f.bsaId || '', f.bsaName || '', f.bsaInfo1 || '', f.bsaInfo2 || '', f.bsaInfo3 || '', villages,
         o.franchiseName ? (o.stockConfirmed ? 'Yes' : 'No') : '',
         n + 1, i.name, i.variantId || 'Custom item', i.qty, i.price, i.qty * i.price,
         unitsOf(o), subtotalOf(o), o.deliveryCharges, totalOf(o),
-        stageReachedAt(o, 'confirmed'), stageReachedAt(o, 'assigned'), stageReachedAt(o, 'delivered'), stageReachedAt(o, 'cancelled'),
+        stageReachedAt(o, 'confirmed'), stageReachedAt(o, 'unassigned'), stageReachedAt(o, 'assigned'), stageReachedAt(o, 'delivered'), stageReachedAt(o, 'cancelled'),
         last ? fmtDate(last.at) : '', last?.by || '', timeline,
       ]);
     });
@@ -545,31 +753,28 @@ export function OrderManagementSystem({ language }: { language: Language }) {
     toast.success(`Exported ${rows.length} product lines from ${filtered.length} orders`);
   };
 
-  // One row per product, split by stage. Uses every filter except the stage filter, since stages are the columns.
+  // Same figures as the Sales Analytics tables: delivered orders only, sales exclude delivery charges.
   const exportProductCSV = () => {
-    const stages = Object.keys(STAGE_META) as Stage[];
-    const zero = () => ({ pending: 0, confirmed: 0, assigned: 0, delivered: 0, cancelled: 0 } as Record<Stage, number>);
-    const map = new Map<string, { name: string; id: string; orders: Set<string>; prices: Set<number>; units: Record<Stage, number>; value: Record<Stage, number> }>();
-    baseFiltered.forEach(o => o.items.forEach(i => {
-      const key = i.variantId || i.name;
-      const row = map.get(key) ?? { name: i.name, id: i.variantId || 'Custom item', orders: new Set<string>(), prices: new Set<number>(), units: zero(), value: zero() };
-      row.orders.add(o.id);
-      row.prices.add(i.price);
-      row.units[o.stage] += i.qty;
-      row.value[o.stage] += i.qty * i.price;
-      map.set(key, row);
-    }));
-    const live = (r: Record<Stage, number>) => r.pending + r.confirmed + r.assigned + r.delivered;
-    const headers = ['Product', 'Product ID', 'Orders', 'Unit Price',
-      ...stages.map(s => `${STAGE_META[s].label} Units`), 'Total Units (excl. Cancelled)',
-      ...stages.map(s => `${STAGE_META[s].label} Value`), 'Total Value (excl. Cancelled)'];
-    const rows = Array.from(map.values()).sort((a, b) => live(b.value) - live(a.value)).map(r => [
-      r.name, r.id, r.orders.size, Array.from(r.prices).sort((a, b) => a - b).join(' / '),
-      ...stages.map(s => r.units[s]), live(r.units),
-      ...stages.map(s => r.value[s]), live(r.value),
+    const tags = cropTagsFor(catalogue);
+    const cropsOf = new Map<string, string>();
+    baseFiltered.forEach(o => o.items.forEach(i => cropsOf.set(i.variantId || i.name, tags(i).join('; '))));
+    const rows = deliveredByProduct(baseFiltered).map(([key, r]) => [
+      r.name, [...r.ids].join('; '), cropsOf.get(key) || '', r.orders.size, r.units, r.sales,
     ]);
-    downloadCSV(`product-sales-${new Date().toISOString().split('T')[0]}.csv`, [headers, ...rows]);
-    toast.success(`Exported ${rows.length} products from ${baseFiltered.length} orders`);
+    if (!rows.length) { toast.error('No delivered orders to export in this view'); return; }
+    downloadCSV(`product-wise-delivered-sales-${new Date().toISOString().split('T')[0]}.csv`,
+      [['Product', 'Product ID', 'Crops', 'Delivered Orders', 'Units', 'Delivered Sales (PKR)'], ...rows]);
+    toast.success(`Exported ${rows.length} products`);
+  };
+
+  const exportCropCSV = () => {
+    const rows = deliveredByCrop(baseFiltered, catalogue).map(([, r]) => [
+      r.name, r.orders.size, r.units, r.sales, r.products.size, [...r.products].join('; '),
+    ]);
+    if (!rows.length) { toast.error('No delivered orders to export in this view'); return; }
+    downloadCSV(`crop-wise-delivered-sales-${new Date().toISOString().split('T')[0]}.csv`,
+      [['Crop', 'Delivered Orders', 'Units', 'Delivered Sales (PKR)', 'Products Sold', 'Product Names'], ...rows]);
+    toast.success(`Exported ${rows.length} crops`);
   };
 
   const saveNewOrder = (draft: OrderDraft) => {
@@ -604,8 +809,13 @@ export function OrderManagementSystem({ language }: { language: Language }) {
     <div className="space-y-4 lg:space-y-6 p-3 lg:p-0">
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-        <h2 className="text-xl lg:text-2xl font-bold text-gray-900 pl-2">Order Management</h2>
-        <div className="flex flex-wrap gap-2">
+        <h2 className="text-xl lg:text-2xl font-bold text-gray-900 pl-2">Online Orders</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-sm text-gray-700 bg-white border rounded-md px-3 h-9 cursor-pointer"
+            title="When on, confirming an order runs the assignment rules. Orders they cannot place go to Unassigned.">
+            <Zap className="size-4 text-[#C7359C]" /> Auto-assign on confirm
+            <Switch checked={autoAssignOn} onCheckedChange={toggleAutoAssign} />
+          </label>
           <Button variant="outline" onClick={resetSamples} className="gap-2" title="Replace all orders with fresh sample data">
             <RefreshCw className="size-4" /> <span className="hidden sm:inline">Reset Samples</span>
           </Button>
@@ -625,8 +835,12 @@ export function OrderManagementSystem({ language }: { language: Language }) {
                 <span className="text-xs text-gray-500">One row per product line, with every order, customer and franchise field and the timeline</span>
               </DropdownMenuItem>
               <DropdownMenuItem onClick={exportProductCSV} className="flex-col items-start gap-0">
-                <span className="font-medium">Product-wise sales</span>
-                <span className="text-xs text-gray-500">One row per product, with units and value in each stage</span>
+                <span className="font-medium">Product-wise delivered sales</span>
+                <span className="text-xs text-gray-500">One row per product: delivered orders, units and sales</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={exportCropCSV} className="flex-col items-start gap-0">
+                <span className="font-medium">Crop-wise delivered sales</span>
+                <span className="text-xs text-gray-500">One row per crop: delivered orders, units and sales</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -671,23 +885,31 @@ export function OrderManagementSystem({ language }: { language: Language }) {
       {/* Date Filter Section — same pattern as the Sales Dashboard */}
       <div className="bg-white rounded-lg border border-gray-200 px-4 py-3">
         <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className={`flex items-center gap-2 flex-wrap ${inProcessOnly ? 'opacity-50' : ''}`}
+            title={inProcessOnly ? 'Date filters are ignored while showing all in-process orders' : undefined}>
             <Calendar className="size-4 text-[#C7359C] flex-shrink-0" />
             {DATE_FILTERS.map(([key, label]) => (
               <Button key={key} variant={dateFilter === key ? 'default' : 'outline'} size="sm"
-                onClick={() => setDateFilter(key)}
+                onClick={() => setDateFilter(key)} disabled={inProcessOnly}
                 className={`h-8 px-3 text-xs ${dateFilter === key ? 'bg-[#C7359C] hover:bg-[#a02d7f]' : ''}`}>
                 {label}
               </Button>
             ))}
           </div>
+          <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer lg:border-l lg:pl-3"
+            title="Shows every Pending, Confirmed, Unassigned and Assigned order, whatever its order date">
+            <Checkbox checked={inProcessOnly} onCheckedChange={v => setInProcessOnly(!!v)} />
+            All in-process orders
+          </label>
           <div className="flex items-center gap-2 text-xs text-gray-600 lg:ml-auto">
-            <span className="font-medium text-[#C7359C]">{DATE_FILTERS.find(d => d[0] === dateFilter)![2]}</span>
+            <span className="font-medium text-[#C7359C]">
+              {inProcessOnly ? 'In process · any date' : DATE_FILTERS.find(d => d[0] === dateFilter)![2]}
+            </span>
             <span className="text-gray-400">•</span>
             <span>{baseFiltered.length} orders</span>
           </div>
         </div>
-        {dateFilter === 'custom' && (
+        {dateFilter === 'custom' && !inProcessOnly && (
           <div className="flex flex-col sm:flex-row gap-2 mt-3 pt-3 border-t border-gray-200">
             <div className="flex-1">
               <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="h-8 text-xs" title="Start date" />
@@ -701,7 +923,7 @@ export function OrderManagementSystem({ language }: { language: Language }) {
 
       {/* View switch */}
       <div className="inline-flex rounded-lg bg-gray-100 p-1">
-        {([['orders', 'Orders', List], ['analytics', 'Sales Analytics', BarChart3]] as const).map(([key, label, Icon]) => (
+        {([['orders', 'Online Orders', List], ['analytics', 'Sales Analytics', BarChart3]] as const).map(([key, label, Icon]) => (
           <button key={key} onClick={() => setView(key)}
             className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
               view === key ? 'bg-white text-[#C7359C] shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}>
@@ -711,11 +933,11 @@ export function OrderManagementSystem({ language }: { language: Language }) {
       </div>
 
       {view === 'analytics' ? (
-        <OrderAnalytics orders={baseFiltered} totalOrders={orders.length} hasFilters={hasFilters} onClearFilters={clearFilters} />
+        <OrderAnalytics orders={baseFiltered} totalOrders={orders.length} hasFilters={hasFilters} catalogue={catalogue} />
       ) : (
       <>
       {/* Stage counters — double as stage filter */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
         <button onClick={() => setStageFilter('all')} className="text-left">
           <Card className={stageFilter === 'all' ? 'border-[#C7359C] ring-1 ring-[#C7359C]' : 'hover:border-gray-300'}>
             <CardContent className="pt-4 pb-3">
@@ -749,34 +971,20 @@ export function OrderManagementSystem({ language }: { language: Language }) {
 
       <Card>
         <CardContent className="pt-5 space-y-4">
-          {/* Search and filters */}
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-            <div className="relative col-span-2">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
-              <Input placeholder="Search order ID, customer, phone, city, franchise..." value={search}
-                onChange={e => setSearch(e.target.value)} className="pl-10 h-9" />
-            </div>
-            <Select value={sourceFilter} onValueChange={setSourceFilter}>
-              <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Sources</SelectItem>
-                <SelectItem value="E-commerce">E-commerce</SelectItem>
-                <SelectItem value="Manual">Manual</SelectItem>
-              </SelectContent>
-            </Select>
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-gray-400" />
+            <Input placeholder="Search order ID, customer, phone, city, franchise..." value={search}
+              onChange={e => setSearch(e.target.value)} className="pl-10 h-9" />
           </div>
-          {hasFilters && (
-            <Button variant="ghost" size="sm" onClick={clearFilters} className="text-red-600 hover:text-red-700 hover:bg-red-50 gap-1">
-              <X className="size-4" /> Clear filters
-            </Button>
-          )}
 
           {/* Bulk actions */}
           {selectedIds.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 bg-pink-50 border border-pink-200 rounded-lg px-3 py-2">
               <span className="text-sm font-semibold text-[#9b2b7a] mr-1">{selectedIds.length} selected</span>
               <Button size="sm" variant="outline" onClick={() => confirmOrders(selectedIds)}>Confirm</Button>
-              <Button size="sm" variant="outline" onClick={() => setDialog({ type: 'assign', ids: selectedIds })}>Assign</Button>
+              <Button size="sm" variant="outline" onClick={() => autoAssignOrders(selectedIds)}>Auto-assign</Button>
+              <Button size="sm" variant="outline" onClick={() => setDialog({ type: 'assign', ids: selectedIds })}>Assign manually</Button>
               <Button size="sm" variant="outline" onClick={() => deliverOrders(selectedIds)}>Mark Delivered</Button>
               <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50"
                 onClick={() => setDialog({ type: 'cancel', ids: selectedIds })}>Cancel Orders</Button>
@@ -799,7 +1007,7 @@ export function OrderManagementSystem({ language }: { language: Language }) {
                       <Checkbox checked={allSelected}
                         onCheckedChange={v => setSelected(v ? new Set(filtered.map(o => o.id)) : new Set())} />
                     </th>
-                    {['Order', 'Customer', 'Items', 'Total', 'Franchise', 'Stage', ''].map(h => (
+                    {['Order', 'Customer', 'Items', 'Total', 'Franchise', ...(stageFilter === 'assigned' ? ['Last Synced'] : []), 'Stage', ''].map(h => (
                       <th key={h} className="text-left py-2.5 px-3 font-semibold text-gray-700 whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -820,8 +1028,8 @@ export function OrderManagementSystem({ language }: { language: Language }) {
                       </td>
                       <td className="py-2.5 px-3 whitespace-nowrap">
                         <span>{o.items.reduce((s, i) => s + i.qty, 0)} units</span>
-                        {canEdit(o) && hasStockIssue(o) && (
-                          <span className="ml-1.5 inline-flex items-center gap-1 text-xs text-amber-700" title="One or more items are short in central stock">
+                        {showsStock(o) && hasStockIssue(o) && (
+                          <span className="ml-1.5 inline-flex items-center gap-1 text-xs text-amber-700" title="One or more items are short at the assigned franchise">
                             <AlertTriangle className="size-3.5" /> Stock
                           </span>
                         )}
@@ -833,11 +1041,17 @@ export function OrderManagementSystem({ language }: { language: Language }) {
                             <p className="font-medium">{o.franchiseName}</p>
                             <p className="text-xs text-gray-400">{[o.zone, o.region].filter(Boolean).join(' / ')}</p>
                           </>
-                        ) : <span className="text-gray-400">Unassigned</span>}
+                        ) : <span className="text-gray-300">—</span>}
                       </td>
+                      {stageFilter === 'assigned' && (
+                        <td className="py-2.5 px-3 text-sm">
+                          {o.franchiseKey ? <LastSync franchiseKey={o.franchiseKey} /> : <span className="text-gray-300">—</span>}
+                        </td>
+                      )}
                       <td className="py-2.5 px-3">
                         <StageBadge stage={o.stage} />
                         {o.stage === 'cancelled' && <p className="text-xs text-red-600 mt-1 max-w-[180px] truncate" title={o.cancelReason}>{o.cancelReason}</p>}
+                        {o.stage === 'unassigned' && <p className="text-xs text-orange-700 mt-1 max-w-[200px] truncate" title={o.unassignedReason}>{o.unassignedReason}</p>}
                       </td>
                       {/* stopPropagation: buttons and menu items here must not also open the details dialog */}
                       <td className="py-2.5 px-3 sticky right-0 bg-white group-hover:bg-gray-50" onClick={e => e.stopPropagation()}>
@@ -863,6 +1077,16 @@ export function OrderManagementSystem({ language }: { language: Language }) {
                               {o.stage === 'assigned' && (
                                 <DropdownMenuItem onClick={() => setDialog({ type: 'assign', ids: [o.id] })}>
                                   <Building2 className="size-4 mr-2" /> Reassign franchise
+                                </DropdownMenuItem>
+                              )}
+                              {o.stage === 'confirmed' && (
+                                <DropdownMenuItem onClick={() => setDialog({ type: 'assign', ids: [o.id] })}>
+                                  <Building2 className="size-4 mr-2" /> Assign manually
+                                </DropdownMenuItem>
+                              )}
+                              {o.stage === 'unassigned' && (
+                                <DropdownMenuItem onClick={() => autoAssignOrders([o.id])}>
+                                  <Zap className="size-4 mr-2" /> Retry auto-assign
                                 </DropdownMenuItem>
                               )}
                               {o.stage !== 'pending' && (
@@ -942,9 +1166,24 @@ export function OrderManagementSystem({ language }: { language: Language }) {
                 <div className="space-y-1">
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Fulfilment</p>
                   <p>Payment: <span className="font-medium">{dialogOrder.paymentMethod}</span></p>
-                  <p>Franchise: <span className="font-medium">{dialogOrder.franchiseName || 'Unassigned'}</span></p>
+                  <p className="flex items-center gap-2">Franchise:
+                    {dialogOrder.franchiseName ? <span className="font-medium">{dialogOrder.franchiseName}</span>
+                      : <span className="text-gray-400">Not yet assigned</span>}
+                  </p>
+                  {dialogOrder.assignedBy && (
+                    <p>Assigned by: <span className="font-medium">{dialogOrder.assignedBy === 'auto' ? 'Auto-assignment rules' : 'Admin (manual)'}</span></p>
+                  )}
+                  {dialogOrder.unassignedReason && (
+                    <div className="mt-2 bg-orange-50 border border-orange-200 rounded-lg p-2 text-orange-800">
+                      <p className="font-semibold text-xs uppercase tracking-wide">Why it is unassigned</p>
+                      <p>{dialogOrder.unassignedReason}</p>
+                    </div>
+                  )}
                   {dialogOrder.franchiseName && (
                     <p className="text-gray-600">{[dialogOrder.zone, dialogOrder.region, dialogOrder.salesUnit].filter(Boolean).join(' / ')}</p>
+                  )}
+                  {dialogOrder.stage === 'assigned' && dialogOrder.franchiseKey && (
+                    <p className="flex items-center gap-2">Last synced: <LastSync franchiseKey={dialogOrder.franchiseKey} /></p>
                   )}
                 </div>
               </div>
@@ -952,7 +1191,7 @@ export function OrderManagementSystem({ language }: { language: Language }) {
               <div className="border rounded-lg overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50">
-                    <tr>{['Item', 'Central stock', 'Qty', 'Price', 'Amount'].map(h => <th key={h} className="text-left py-2 px-3 font-semibold text-gray-600">{h}</th>)}</tr>
+                    <tr>{['Item', ...(showsStock(dialogOrder) ? [`Stock at ${dialogOrder.franchiseName}`] : []), 'Qty', 'Price', 'Amount'].map(h => <th key={h} className="text-left py-2 px-3 font-semibold text-gray-600">{h}</th>)}</tr>
                   </thead>
                   <tbody className="divide-y">
                     {dialogOrder.items.map((i, n) => {
@@ -960,7 +1199,7 @@ export function OrderManagementSystem({ language }: { language: Language }) {
                       return (
                         <tr key={n}>
                           <td className="py-2 px-3">{i.name}</td>
-                          <td className={`py-2 px-3 text-xs ${toneClass[st.tone]}`}>{st.label}</td>
+                          {showsStock(dialogOrder) && <td className={`py-2 px-3 text-xs ${toneClass[st.tone]}`}>{st.label}</td>}
                           <td className="py-2 px-3">{i.qty}</td>
                           <td className="py-2 px-3">{money(i.price)}</td>
                           <td className="py-2 px-3 font-medium">{money(i.qty * i.price)}</td>
@@ -1030,7 +1269,7 @@ export function OrderManagementSystem({ language }: { language: Language }) {
       <Dialog open={dialog?.type === 'assign'} onOpenChange={v => !v && setDialog(null)}>
         <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
           {dialog?.type === 'assign' && (
-            <AssignForm orders={dialogOrders} franchises={franchises} stockStatus={stockStatus}
+            <AssignForm orders={dialogOrders} franchises={franchises}
               onCancel={() => setDialog(null)}
               onAssign={f => { assignOrders(dialog.ids, f); setSelected(new Set()); setDialog(null); }} />
           )}
@@ -1051,8 +1290,10 @@ export function OrderManagementSystem({ language }: { language: Language }) {
                 : dialogOrders[0]?.stage === 'cancelled'
                   ? `The order returns to ${STAGE_META[dialogOrders[0].cancelledFrom ?? 'pending'].label}, the stage it was cancelled from.`
                   : dialogOrders[0]?.stage === 'assigned'
-                    ? 'The order returns to Confirmed and the franchise assignment is removed.'
-                    : 'The order moves back one stage.'}
+                    ? 'The order moves to Unassigned and the franchise assignment is removed. Your reason is shown on the order.'
+                    : dialogOrders[0]?.stage === 'unassigned'
+                      ? 'The order returns to Confirmed, where it waits for auto-assignment.'
+                      : 'The order moves back one stage.'}
               reasons={dialog.type === 'cancel' ? CANCEL_REASONS : REVERT_REASONS}
               confirmLabel={dialog.type === 'cancel' ? 'Cancel Order' : 'Confirm'}
               destructive={dialog.type === 'cancel'}
@@ -1072,44 +1313,62 @@ export function OrderManagementSystem({ language }: { language: Language }) {
 
 // ── Sales analytics ──────────────────────────────────────────────────────────
 
-function OrderAnalytics({ orders, totalOrders, hasFilters, onClearFilters }: {
-  orders: Order[]; totalOrders: number; hasFilters: boolean; onClearFilters: () => void;
-}) {
-  const stages = Object.keys(STAGE_META) as Stage[];
-  const sum = (list: Order[]) => ({
-    orders: list.length,
-    units: list.reduce((s, o) => s + unitsOf(o), 0),
-    products: list.reduce((s, o) => s + subtotalOf(o), 0),
-    delivery: list.reduce((s, o) => s + o.deliveryCharges, 0),
-    total: list.reduce((s, o) => s + totalOf(o), 0),
-  });
-  const byStage = stages.map(stage => ({ stage, ...sum(orders.filter(o => o.stage === stage)) }));
-  const all = sum(orders);
-  const get = (s: Stage) => byStage.find(r => r.stage === s)!;
-  const open = sum(orders.filter(o => ['pending', 'confirmed', 'assigned'].includes(o.stage)));
-  const pct = (part: number, whole: number) => (whole ? `${Math.round((part / whole) * 100)}%` : '0%');
-  const maxTotal = Math.max(1, ...byStage.map(r => r.total));
+const NO_CROP = 'No crop tagged';
 
-  // Product-wise units per stage
-  const productMap = new Map<string, { name: string; units: Record<Stage, number>; delivered: number; total: number }>();
-  orders.forEach(o => o.items.forEach(i => {
-    const key = i.variantId || i.name;
-    const row = productMap.get(key) ?? {
-      name: i.name, delivered: 0, total: 0,
-      units: { pending: 0, confirmed: 0, assigned: 0, delivered: 0, cancelled: 0 },
-    };
-    row.units[o.stage] += i.qty;
-    if (o.stage === 'delivered') row.delivered += i.qty * i.price;
-    if (o.stage !== 'cancelled') row.total += i.qty * i.price;
-    productMap.set(key, row);
-  }));
-  const products = Array.from(productMap.entries()).sort((a, b) => b[1].total - a[1].total);
+// Delivered sales grouped by a key per product line. An order counts once per group however many lines it has.
+type SalesRow = { name: string; orders: Set<string>; units: number; sales: number; ids: Set<string>; products: Set<string> };
+function groupDelivered(orders: Order[], keysFor: (i: OrderItem) => { key: string; name: string }[]): [string, SalesRow][] {
+  const map = new Map<string, SalesRow>();
+  orders.filter(o => o.stage === 'delivered').forEach(o => o.items.forEach(i => keysFor(i).forEach(({ key, name }) => {
+    const row = map.get(key) ?? { name, orders: new Set<string>(), units: 0, sales: 0, ids: new Set<string>(), products: new Set<string>() };
+    row.orders.add(o.id);
+    row.units += i.qty;
+    row.sales += i.qty * i.price;
+    row.ids.add(i.variantId || 'Custom item');
+    row.products.add(i.name);
+    map.set(key, row);
+  })));
+  return Array.from(map.entries()).sort((a, b) => b[1].sales - a[1].sales);
+}
+
+const cropTagsFor = (catalogue: CatalogueItem[]) => {
+  const byVariant = new Map(catalogue.map(c => [c.variantId, c.crops ?? []]));
+  return (i: OrderItem) => (i.variantId && byVariant.get(i.variantId)) || [];
+};
+
+const deliveredByProduct = (orders: Order[]) => groupDelivered(orders, i => [{ key: i.variantId || i.name, name: i.name }]);
+
+// Crops come from the product's crop tags in the Products module; a product tagged with several crops counts under each.
+function deliveredByCrop(orders: Order[], catalogue: CatalogueItem[]) {
+  const tags = cropTagsFor(catalogue);
+  return groupDelivered(orders, i => {
+    const t = tags(i);
+    return t.length ? t.map(c => ({ key: c.toLowerCase(), name: c })) : [{ key: NO_CROP, name: NO_CROP }];
+  });
+}
+
+function OrderAnalytics({ orders, totalOrders, hasFilters, catalogue }: {
+  orders: Order[]; totalOrders: number; hasFilters: boolean; catalogue: CatalogueItem[];
+}) {
+  const sum = (list: Order[]) => ({ orders: list.length, total: list.reduce((s, o) => s + totalOf(o), 0) });
+  const all = sum(orders);
+  const delivered = orders.filter(o => o.stage === 'delivered');
+  const deliveredSum = sum(delivered);
+  const open = sum(orders.filter(o => ['pending', 'confirmed', 'unassigned', 'assigned'].includes(o.stage)));
+  const cancelled = sum(orders.filter(o => o.stage === 'cancelled'));
+  const pct = (part: number, whole: number) => (whole ? `${Math.round((part / whole) * 100)}%` : '0%');
+
+  const products = deliveredByProduct(orders);
+  const crops = deliveredByCrop(orders, catalogue);
+  const tags = cropTagsFor(catalogue);
+  const multiCrop = delivered.some(o => o.items.some(i => tags(i).length > 1));
+  const untagged = crops.find(([k]) => k === NO_CROP);
 
   const tiles = [
     { label: 'Total order value', value: money(all.total), count: all.orders, sub: 'All stages' },
-    { label: 'Delivered sales', value: money(get('delivered').total), count: get('delivered').orders, sub: `${pct(get('delivered').orders, all.orders)} of orders` },
+    { label: 'Delivered sales', value: money(deliveredSum.total), count: deliveredSum.orders, sub: `${pct(deliveredSum.orders, all.orders)} of orders` },
     { label: 'Open pipeline', value: money(open.total), count: open.orders, sub: 'Not yet delivered' },
-    { label: 'Cancelled value', value: money(get('cancelled').total), count: get('cancelled').orders, sub: `${pct(get('cancelled').orders, all.orders)} of orders` },
+    { label: 'Cancelled value', value: money(cancelled.total), count: cancelled.orders, sub: `${pct(cancelled.orders, all.orders)} of orders` },
   ];
   const th = 'py-2.5 px-3 font-semibold text-gray-700 whitespace-nowrap';
   const num = 'py-2.5 px-3 text-right whitespace-nowrap tabular-nums';
@@ -1118,16 +1377,53 @@ function OrderAnalytics({ orders, totalOrders, hasFilters, onClearFilters }: {
     return (
       <Card><CardContent className="py-14 text-center text-gray-500">
         No orders match the current filters.
-        {hasFilters && <Button variant="link" onClick={onClearFilters} className="text-[#C7359C]">Clear filters</Button>}
       </CardContent></Card>
     );
   }
+
+  const DeliveredTable = ({ title, firstColumn, note, rows }: {
+    title: string; firstColumn: string; note: React.ReactNode; rows: [string, SalesRow][];
+  }) => (
+    <Card>
+      <CardContent className="pt-5 space-y-3">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+          <p className="text-xs text-gray-500">{note}</p>
+        </div>
+        {rows.length === 0 ? (
+          <p className="text-sm text-gray-500 border border-dashed rounded-lg p-6 text-center">No delivered orders in this view</p>
+        ) : (
+          <div className="overflow-x-auto border rounded-lg">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-gray-50">
+                  <th className={`${th} text-left`}>{firstColumn}</th>
+                  <th className={`${th} text-right`}>Delivered orders</th>
+                  <th className={`${th} text-right`}>Units</th>
+                  <th className={`${th} text-right`}>Delivered sales</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(([key, r]) => (
+                  <tr key={key} className="border-b last:border-0">
+                    <td className={`py-2.5 px-3 ${key === NO_CROP ? 'text-gray-500 italic' : ''}`}>{r.name}</td>
+                    <td className={num}>{r.orders.size}</td>
+                    <td className={num}>{r.units}</td>
+                    <td className={`${num} font-semibold`}>{money(r.sales)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 
   return (
     <div className="space-y-4 lg:space-y-6">
       <p className="text-xs text-gray-500">
         Based on {orders.length} of {totalOrders} orders{hasFilters ? ' matching the current filters' : ''}. Values include delivery charges unless stated.
-        {hasFilters && <button onClick={onClearFilters} className="ml-2 text-[#C7359C] hover:underline">Clear filters</button>}
       </p>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -1147,93 +1443,24 @@ function OrderAnalytics({ orders, totalOrders, hasFilters, onClearFilters }: {
         ))}
       </div>
 
-      <Card>
-        <CardContent className="pt-5 space-y-5">
-          <h3 className="text-lg font-semibold text-gray-900">Order value by stage</h3>
-          <div className="space-y-3">
-            {byStage.map(r => (
-              <div key={r.stage} className="grid grid-cols-[84px_1fr_auto] items-center gap-3 text-sm"
-                title={`${STAGE_META[r.stage].label}: ${money(r.total)} from ${r.orders} orders`}>
-                <span className="text-gray-700">{STAGE_META[r.stage].label}</span>
-                <div className="h-3 bg-gray-100 rounded-r">
-                  <div className="h-3 rounded-r bg-[#C7359C]" style={{ width: `${(r.total / maxTotal) * 100}%` }} />
-                </div>
-                <span className="tabular-nums text-gray-900 font-medium w-28 text-right">{money(r.total)}</span>
-              </div>
-            ))}
-          </div>
-
-          <div className="overflow-x-auto border rounded-lg">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50">
-                  <th className={`${th} text-left`}>Stage</th>
-                  {['Orders', '% of orders', 'Units', 'Product value', 'Delivery charges', 'Total value', 'Avg order value', '% of value'].map(h => (
-                    <th key={h} className={`${th} text-right`}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {byStage.map(r => (
-                  <tr key={r.stage} className="border-b">
-                    <td className="py-2.5 px-3"><StageBadge stage={r.stage} /></td>
-                    <td className={num}>{r.orders}</td>
-                    <td className={num}>{pct(r.orders, all.orders)}</td>
-                    <td className={num}>{r.units}</td>
-                    <td className={num}>{money(r.products)}</td>
-                    <td className={num}>{money(r.delivery)}</td>
-                    <td className={`${num} font-semibold`}>{money(r.total)}</td>
-                    <td className={num}>{r.orders ? money(r.total / r.orders) : '—'}</td>
-                    <td className={num}>{pct(r.total, all.total)}</td>
-                  </tr>
-                ))}
-                <tr className="bg-gray-50 font-semibold">
-                  <td className="py-2.5 px-3">All stages</td>
-                  <td className={num}>{all.orders}</td>
-                  <td className={num}>100%</td>
-                  <td className={num}>{all.units}</td>
-                  <td className={num}>{money(all.products)}</td>
-                  <td className={num}>{money(all.delivery)}</td>
-                  <td className={num}>{money(all.total)}</td>
-                  <td className={num}>{money(all.total / all.orders)}</td>
-                  <td className={num}>100%</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="pt-5 space-y-3">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900">Product sales by stage</h3>
-            <p className="text-xs text-gray-500">Units in each stage. Values exclude delivery charges; order value excludes cancelled orders.</p>
-          </div>
-          <div className="overflow-x-auto border rounded-lg">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50">
-                  <th className={`${th} text-left`}>Product</th>
-                  {stages.map(s => <th key={s} className={`${th} text-right`}>{STAGE_META[s].label}</th>)}
-                  <th className={`${th} text-right`}>Delivered value</th>
-                  <th className={`${th} text-right`}>Order value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map(([key, p]) => (
-                  <tr key={key} className="border-b last:border-0">
-                    <td className="py-2.5 px-3">{p.name}</td>
-                    {stages.map(s => <td key={s} className={num}>{p.units[s] || <span className="text-gray-300">0</span>}</td>)}
-                    <td className={num}>{money(p.delivered)}</td>
-                    <td className={`${num} font-semibold`}>{money(p.total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 lg:gap-6">
+        <DeliveredTable
+          title="Product-wise delivered sales"
+          firstColumn="Product"
+          rows={products}
+          note="Delivered orders only. Sales exclude delivery charges."
+        />
+        <DeliveredTable
+          title="Crop-wise delivered sales"
+          firstColumn="Crop"
+          rows={crops}
+          note={<>
+            Delivered orders only, by the crops tagged on each product in the Products module. Sales exclude delivery charges.
+            {multiCrop && ' Products tagged with several crops count under each, so crop totals can add up to more than total sales.'}
+            {untagged && ` ${money(untagged[1].sales)} is from products with no crop tagged yet.`}
+          </>}
+        />
+      </div>
     </div>
   );
 }
@@ -1265,20 +1492,17 @@ function ReasonForm({ title, description, reasons, confirmLabel, destructive, on
 
 // ── Assign dialog body ───────────────────────────────────────────────────────
 
-function AssignForm({ orders, franchises, stockStatus, onCancel, onAssign }: {
+function AssignForm({ orders, franchises, onCancel, onAssign }: {
   orders: Order[]; franchises: FranchiseOption[];
-  stockStatus: (i: OrderItem) => { label: string; tone: 'ok' | 'warn' | 'bad' | 'none' };
   onCancel: () => void; onAssign: (f: FranchiseOption) => void;
 }) {
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<FranchiseOption | null>(null);
   const [stockConfirmed, setStockConfirmed] = useState(false);
 
-  const eligible = orders.filter(o => o.stage === 'confirmed' || (orders.length === 1 && o.stage === 'assigned'));
+  const eligible = orders.filter(o => o.stage === 'confirmed' || o.stage === 'unassigned' || (orders.length === 1 && o.stage === 'assigned'));
   const matches = franchises.filter(f =>
     [f.name, f.zone, f.region, f.salesUnit].some(v => v.toLowerCase().includes(query.toLowerCase())));
-  const issues = eligible.flatMap(o => o.items.map(i => ({ o, i, st: stockStatus(i) })))
-    .filter(x => x.st.tone === 'bad' || x.st.tone === 'warn');
 
   return (
     <>
@@ -1287,7 +1511,7 @@ function AssignForm({ orders, franchises, stockStatus, onCancel, onAssign }: {
         <DialogDescription>
           {eligible.length === orders.length
             ? 'Choose the franchise that will fulfil this delivery.'
-            : `${eligible.length} of ${orders.length} selected orders are Confirmed and can be assigned. The rest are skipped.`}
+            : `${eligible.length} of ${orders.length} selected orders are Confirmed or Unassigned and can be assigned. The rest are skipped.`}
         </DialogDescription>
       </DialogHeader>
 
@@ -1305,7 +1529,10 @@ function AssignForm({ orders, franchises, stockStatus, onCancel, onAssign }: {
             {matches.slice(0, 50).map(f => (
               <button key={f.key} onClick={() => setPicked(f)}
                 className={`w-full text-left px-3 py-2 text-sm hover:bg-pink-50 ${picked?.key === f.key ? 'bg-pink-50 border-l-4 border-[#C7359C]' : ''}`}>
-                <p className="font-medium">{f.name}</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-medium">{f.name}</p>
+                  <span className="text-xs"><LastSync franchiseKey={f.key} /></span>
+                </div>
                 <p className="text-xs text-gray-500">{[f.zone, f.region, f.salesUnit].filter(Boolean).join(' / ')}</p>
               </button>
             ))}
@@ -1313,22 +1540,10 @@ function AssignForm({ orders, franchises, stockStatus, onCancel, onAssign }: {
             {matches.length > 50 && <p className="px-3 py-2 text-xs text-gray-400 text-center">Showing first 50 — refine your search</p>}
           </div>
 
-          {/* Stock check: central stock only, so the admin confirms franchise stock by hand */}
+          {/* Stock is only known per franchise, so it is shown on the order after assignment */}
           <div className="border rounded-lg p-3 space-y-2">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Stock check</p>
-            {issues.length === 0 ? (
-              <p className="text-sm text-gray-600">No shortages flagged against central stock.</p>
-            ) : (
-              <ul className="text-sm space-y-1">
-                {issues.map((x, n) => (
-                  <li key={n} className="flex items-start gap-2 text-amber-800">
-                    <AlertTriangle className="size-4 mt-0.5 flex-shrink-0" />
-                    <span>{orders.length > 1 && `${x.o.id}: `}{x.i.name} × {x.i.qty} — {x.st.label}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="text-xs text-gray-500">Franchise-level stock is not available yet, so this check uses central inventory.</p>
+            <p className="text-sm text-gray-600">Stock at the chosen franchise is shown on the order once it is assigned.</p>
             <label className="flex items-start gap-2 text-sm cursor-pointer pt-1">
               <Checkbox checked={stockConfirmed} onCheckedChange={v => setStockConfirmed(!!v)} className="mt-0.5" />
               <span>I have confirmed with the franchise that the ordered items are available</span>
@@ -1422,7 +1637,7 @@ function OrderForm({ order, catalogue, stockStatus, onCancel, onSave }: {
                 <SelectTrigger><SelectValue placeholder={catalogue.length ? 'Add a product from the catalogue' : 'Catalogue unavailable'} /></SelectTrigger>
                 <SelectContent>
                   {catalogue.map(c => (
-                    <SelectItem key={c.variantId} value={c.variantId}>{c.name} — {money(c.price)} ({c.stock} in stock)</SelectItem>
+                    <SelectItem key={c.variantId} value={c.variantId}>{c.name} — {money(c.price)}{order && showsStock(order) ? ` (${c.stock} in stock)` : ''}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -1442,7 +1657,7 @@ function OrderForm({ order, catalogue, stockStatus, onCancel, onSave }: {
                   <div key={n} className="grid grid-cols-12 gap-2 items-start border rounded-lg p-2">
                     <div className="col-span-12 sm:col-span-5">
                       <Input value={i.name} onChange={e => setItem(n, { name: e.target.value })} placeholder="Item name" readOnly={!!i.variantId} />
-                      <p className={`text-xs mt-1 ${toneClass[st.tone]}`}>{st.label}</p>
+                      {order && showsStock(order) && <p className={`text-xs mt-1 ${toneClass[st.tone]}`}>{st.label}</p>}
                     </div>
                     <div className="col-span-3 sm:col-span-2">
                       <Input type="number" min={1} value={i.qty} onChange={e => setItem(n, { qty: num(e.target.value) })} title="Quantity" />

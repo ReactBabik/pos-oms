@@ -38,7 +38,7 @@ const mockLowStock = [
 ];
 
 const moduleCards = [
-  { tab: 'orders',    icon: ClipboardList, labelEn: 'Orders',  labelUr: 'آرڈرز'      },
+  { tab: 'orders',    icon: ClipboardList, labelEn: 'Online Orders',  labelUr: 'آن لائن آرڈرز'      },
   { tab: 'inventory', icon: Warehouse, labelEn: 'Inventory',  labelUr: 'سٹاک'       },
   { tab: 'credit',    icon: CreditCard, labelEn: 'Khata',      labelUr: 'کھاتہ'      },
   { tab: 'customers', icon: Users,      labelEn: 'Customers',  labelUr: 'گاہک'       },

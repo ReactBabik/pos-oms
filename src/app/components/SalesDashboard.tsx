@@ -58,6 +58,58 @@ interface Product {
 
 const COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ef4444'];
 
+type FbrStatus = 'Reported' | 'Pending' | 'Failed';
+
+interface SaleFranchise { franchiseId: string; franchiseName: string; zone: string; region: string; salesUnit: string; }
+
+// Active franchises from the Franchise Master, one entry per franchise (the master has one row per village).
+function loadFranchiseList(): SaleFranchise[] {
+  try {
+    const rows: any[] = JSON.parse(localStorage.getItem('franchiseMaster') || '[]');
+    const seen = new Map<string, SaleFranchise>();
+    rows.forEach(r => {
+      if (!r.franchiseName || (r.franchiseStatus || '').toLowerCase() === 'inactive') return;
+      const id = r.associatedFranchiseId || r.franchiseName;
+      if (!seen.has(id)) seen.set(id, { franchiseId: id, franchiseName: r.franchiseName, zone: r.zone || '', region: r.region || '', salesUnit: r.salesUnit || '' });
+    });
+    return Array.from(seen.values());
+  } catch { return []; }
+}
+
+const hashOf = (text: string) => [...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+
+// Sales recorded so far carry no franchise or FBR fields. Until the franchise POS sends them, each sale gets a
+// stable sample franchise and FBR status so the reports and filters can be reviewed. Real values win when present.
+function withFranchiseAndFbr(sale: any, franchises: SaleFranchise[]) {
+  const h = hashOf(String(sale.id));
+  const sample = franchises.length ? franchises[h % franchises.length] : undefined;
+  const franchise: SaleFranchise = sale.franchiseId || sale.franchiseName
+    ? { franchiseId: sale.franchiseId || '', franchiseName: sale.franchiseName || '', zone: sale.zone || '', region: sale.region || '', salesUnit: sale.salesUnit || '' }
+    : sample ?? { franchiseId: '', franchiseName: '', zone: '', region: '', salesUnit: '' };
+  const fbrStatus: FbrStatus = sale.fbrStatus || (['Reported', 'Reported', 'Reported', 'Reported', 'Reported', 'Reported', 'Pending', 'Pending', 'Failed'] as FbrStatus[])[(h >> 3) % 9];
+  const fbrInvoiceNumber: string = sale.fbrInvoiceNumber || (fbrStatus === 'Reported' ? `FBR-${String(h).padStart(10, '0').slice(-10)}` : '');
+  return { ...franchise, fbrStatus, fbrInvoiceNumber };
+}
+
+function csvCell(v: unknown) {
+  const s = String(v ?? '');
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function downloadCSV(filename: string, rows: unknown[][]) {
+  // BOM so Excel opens Urdu names correctly
+  const blob = new Blob(['\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 export function SalesDashboard({ language }: { language: Language }) {
   const [dateRange, setDateRange] = useState('week');
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
@@ -69,7 +121,7 @@ export function SalesDashboard({ language }: { language: Language }) {
   const [isLoading, setIsLoading] = useState(true);
   
   // Main date filter states (for dashboard KPIs and charts)
-  const [dashboardDateFilter, setDashboardDateFilter] = useState<'today' | 'mtd' | 'last7' | 'last30' | 'custom'>('mtd');
+  const [dashboardDateFilter, setDashboardDateFilter] = useState<'all' | 'today' | 'mtd' | 'last7' | 'last30' | 'custom'>('mtd');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
   
@@ -98,8 +150,10 @@ export function SalesDashboard({ language }: { language: Language }) {
       const result = await response.json();
 
       if (result.success && result.sales) {
+        const franchises = loadFranchiseList();
         // Transform sales data to match order format
         const transformedOrders = result.sales.map((sale: any) => ({
+          ...withFranchiseAndFbr(sale, franchises),
           id: sale.id,
           date: sale.date,
           customer: sale.customer,
@@ -196,6 +250,9 @@ export function SalesDashboard({ language }: { language: Language }) {
     let endDate: Date = now;
 
     switch (dashboardDateFilter) {
+      case 'all':
+        startDate = new Date(0);
+        break;
       case 'today':
         startDate = today;
         break;
@@ -231,6 +288,8 @@ export function SalesDashboard({ language }: { language: Language }) {
   // Get the label for KPI cards based on filter
   const getDateRangeLabel = () => {
     switch (dashboardDateFilter) {
+      case 'all':
+        return 'All Time';
       case 'today':
         return 'Today';
       case 'mtd':
@@ -408,7 +467,11 @@ export function SalesDashboard({ language }: { language: Language }) {
 
   // Filter orders based on criteria
   const filteredOrders = orders.filter(order => {
-    // Date filter
+    // Top date bar (Today / MTD / Last 7 Days / ...) applies to the report and its exports too
+    const placed = new Date(order.date);
+    if (placed < filterStartDate || placed > filterEndDate) return false;
+
+    // Report's own date range, which can narrow further
     if (dateFrom) {
       const orderDate = new Date(order.date);
       const fromDate = new Date(dateFrom);
@@ -438,6 +501,13 @@ export function SalesDashboard({ language }: { language: Language }) {
     if (paymentFilter !== 'all' && order.payment !== paymentFilter) {
       return false;
     }
+
+    // Zone / Region / Sales Unit / Franchise filters
+    const ff = franchiseFilters;
+    if (ff.zoneFilter !== 'all' && order.zone !== ff.zoneFilter) return false;
+    if (ff.regionFilter !== 'all' && order.region !== ff.regionFilter) return false;
+    if (ff.salesUnitFilter !== 'all' && order.salesUnit !== ff.salesUnitFilter) return false;
+    if (ff.franchiseFilter !== 'all' && order.franchiseName !== ff.franchiseFilter) return false;
 
     // Amount filter
     if (minAmount && order.total < parseFloat(minAmount)) {
@@ -471,81 +541,64 @@ export function SalesDashboard({ language }: { language: Language }) {
     maxAmount
   ].filter(Boolean).length;
 
-  // Export to CSV
+  // Both exports cover every order matching the current filters, not just the rows in view.
   const exportToCSV = () => {
-    const headers = ['Order ID', 'Date', 'Time', 'Customer', 'Items Count', 'Amount (PKR)', 'Payment', 'Status'];
+    const headers = ['Order ID', 'Date', 'Time', 'Customer', 'Franchise ID', 'Franchise Name', 'Zone', 'Region', 'Sales Unit',
+      'Items Count', 'Amount (PKR)', 'Payment', 'Status', 'FBR Status', 'FBR Invoice No.'];
     const rows = filteredOrders.map(order => [
       order.id,
       new Date(order.date).toLocaleDateString(),
       new Date(order.date).toLocaleTimeString(),
       order.customer,
+      order.franchiseId,
+      order.franchiseName,
+      order.zone,
+      order.region,
+      order.salesUnit,
       order.items.length,
       order.total,
       order.payment,
-      order.status
+      order.status,
+      order.fbrStatus,
+      order.fbrInvoiceNumber
     ]);
-
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `orders_report_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
+    downloadCSV(`orders_report_${new Date().toISOString().split('T')[0]}.csv`, [headers, ...rows]);
     toast.success('Report exported successfully', {
       description: `${filteredOrders.length} orders exported to CSV`
     });
   };
 
-  // Export to Excel (detailed)
+  // One row per product line; order fields repeat on every line so the file can be filtered and pivoted.
   const exportToExcel = () => {
-    const headers = ['Order ID', 'Date', 'Time', 'Customer', 'Product', 'Quantity', 'Price', 'Subtotal', 'Discount', 'Total', 'Payment', 'Status'];
-    const rows: any[] = [];
-
-    filteredOrders.forEach(order => {
-      order.items.forEach((item, index) => {
-        rows.push([
-          index === 0 ? order.id : '',
-          index === 0 ? new Date(order.date).toLocaleDateString() : '',
-          index === 0 ? new Date(order.date).toLocaleTimeString() : '',
-          index === 0 ? order.customer : '',
-          item.name,
-          item.quantity,
-          item.price,
-          index === 0 ? order.subtotal : '',
-          index === 0 ? order.discount : '',
-          index === 0 ? order.total : '',
-          index === 0 ? order.payment : '',
-          index === 0 ? order.status : ''
-        ]);
-      });
-    });
-
-    const csvContent = [
-      headers.join(','),
-      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
-    link.setAttribute('download', `orders_detailed_${new Date().toISOString().split('T')[0]}.csv`);
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
+    const headers = ['Order ID', 'Date', 'Time', 'Customer', 'Franchise ID', 'Franchise Name', 'Zone', 'Region', 'Sales Unit',
+      'Line No', 'Product', 'Quantity', 'Price', 'Line Amount', 'Order Subtotal', 'Order Discount', 'Order Total',
+      'Payment', 'Status', 'FBR Status', 'FBR Invoice No.'];
+    const rows = filteredOrders.flatMap(order => order.items.map((item: any, index: number) => [
+      order.id,
+      new Date(order.date).toLocaleDateString(),
+      new Date(order.date).toLocaleTimeString(),
+      order.customer,
+      order.franchiseId,
+      order.franchiseName,
+      order.zone,
+      order.region,
+      order.salesUnit,
+      index + 1,
+      item.name,
+      item.quantity,
+      item.price,
+      item.quantity * item.price,
+      order.subtotal,
+      order.discount,
+      order.total,
+      order.payment,
+      order.status,
+      order.fbrStatus,
+      order.fbrInvoiceNumber
+    ]));
+    downloadCSV(`orders_detailed_${new Date().toISOString().split('T')[0]}.csv`, [headers, ...rows]);
     toast.success('Detailed report exported successfully', {
-      description: `${filteredOrders.length} orders with item details exported`
+      description: `${filteredOrders.length} orders (${rows.length} product lines) exported`
     });
   };
 
@@ -646,6 +699,14 @@ export function SalesDashboard({ language }: { language: Language }) {
           {/* Quick Filter Buttons */}
           <div className="flex items-center gap-2 flex-wrap">
             <Calendar className="size-4 text-[#C7359C] flex-shrink-0" />
+            <Button
+              variant={dashboardDateFilter === 'all' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setDashboardDateFilter('all')}
+              className={`h-8 px-3 text-xs ${dashboardDateFilter === 'all' ? 'bg-[#C7359C] hover:bg-[#a02d7f]' : ''}`}
+            >
+              All Time
+            </Button>
             <Button
               variant={dashboardDateFilter === 'today' ? 'default' : 'outline'}
               size="sm"
@@ -1055,7 +1116,7 @@ export function SalesDashboard({ language }: { language: Language }) {
                 </CardDescription>
               </div>
               <Badge className="bg-gradient-to-r from-[#C7359C] to-purple-600">
-                {filteredOrders.length} of {orders.length} Orders
+                {filteredOrders.length} of {filteredDashboardOrders.length} Orders · {getDateRangeLabel()}
               </Badge>
             </div>
 
