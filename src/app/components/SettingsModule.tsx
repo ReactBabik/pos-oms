@@ -15,19 +15,22 @@ import {
   XCircle
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { ProductPointsEditor, FraudRulesSettings } from './LoyaltySettingsParts';
+import { DEFAULT_PRODUCT_RULES, ProductPointsRule } from '../utils/loyaltyStore';
 
 const PRIMARY = '#C7359C';
 
 // ── Nav sections ─────────────────────────────────────────────────────────────
 type Section =
   | 'store' | 'pos' | 'receipt'
-  | 'loyalty' | 'credit' | 'segments' | 'notifications';
+  | 'loyalty' | 'fraud' | 'credit' | 'segments' | 'notifications';
 
 const NAV: { key: Section; label: string; icon: React.ElementType; description: string }[] = [
   { key: 'store',         label: 'Store Information',       icon: Store,       description: 'Business details & contact info' },
   { key: 'pos',           label: 'POS & Display',           icon: ShoppingCart,description: 'Point of sale display preferences' },
   { key: 'receipt',       label: 'Receipt & Printing',      icon: Receipt,     description: 'Receipt content and print options' },
   { key: 'loyalty',       label: 'Loyalty Program',         icon: Gift,        description: 'Points earning & redemption rules' },
+  { key: 'fraud',         label: 'Fraud Rules & Controls',  icon: Shield,      description: 'Fraud flags, caps and alerts' },
   { key: 'credit',        label: 'Credit Management',       icon: CreditCard,  description: 'Credit policy and overdue settings' },
   { key: 'segments',      label: 'Customer Segments',       icon: Users,       description: 'Segment classification criteria' },
   { key: 'notifications', label: 'Notifications & Alerts',  icon: Bell,        description: 'Stock, expiry and sales alerts' },
@@ -77,11 +80,7 @@ function SectionHeader({ icon: Icon, title, description }: { icon: React.Element
   );
 }
 
-interface ProductLoyaltyOverride {
-  id: string;
-  productName: string;
-  pointsPerUnit: number;
-}
+type ProductLoyaltyOverride = ProductPointsRule;
 
 interface LoyaltyProgram {
   id: string;
@@ -99,6 +98,7 @@ interface LoyaltyProgram {
   showBalanceOnReceipt: boolean;
   notifyOnEarning: boolean;
   productOverrides: ProductLoyaltyOverride[];
+  unlistedProducts?: 'standard' | 'none';
 }
 
 const EMPTY_PROGRAM: Omit<LoyaltyProgram, 'id' | 'createdAt' | 'active'> = {
@@ -114,6 +114,7 @@ const EMPTY_PROGRAM: Omit<LoyaltyProgram, 'id' | 'createdAt' | 'active'> = {
   showBalanceOnReceipt: true,
   notifyOnEarning: true,
   productOverrides: [],
+  unlistedProducts: 'standard',
 };
 
 export function SettingsModule() {
@@ -171,7 +172,13 @@ export function SettingsModule() {
       };
       return [migrated];
     }
-    return [];
+    // Prototype: start with one active program so the rules can be seen and edited
+    return [{
+      id: 'prog-rabi-2026', name: 'Rabi Loyalty Program 2026', fromDate: '2026-10-01', toDate: '2027-03-31', active: true,
+      createdAt: new Date().toISOString(), standardPointsPerRs: 0.01, minPurchaseForPoints: 500, pointsValidityDays: 365,
+      redemptionRate: 1, minPointsToRedeem: 100, maxRedemptionPct: 20, showBalanceOnReceipt: true, notifyOnEarning: true,
+      productOverrides: DEFAULT_PRODUCT_RULES, unlistedProducts: 'standard',
+    }];
   });
   // UI state for the loyalty sub-screen
   type LoyaltyView = 'list' | 'form' | 'view';
@@ -186,6 +193,8 @@ export function SettingsModule() {
     if (active) {
       localStorage.setItem('loyaltySettings', JSON.stringify({
         enabled: true,
+        programName: active.name,
+        unlistedProducts: active.unlistedProducts ?? 'standard',
         standardPointsPerRs: active.standardPointsPerRs,
         minPurchaseForPoints: active.minPurchaseForPoints,
         pointsValidityDays: active.pointsValidityDays,
@@ -210,6 +219,7 @@ export function SettingsModule() {
       ...prev,
       productOverrides: [...prev.productOverrides, {
         id: Date.now().toString(),
+        sku: "", eligible: true,
         productName: loyaltyFormOverride.productName.trim(),
         pointsPerUnit: parseFloat(loyaltyFormOverride.pointsPerUnit),
       }],
@@ -507,12 +517,13 @@ export function SettingsModule() {
                 {vp.productOverrides.length > 0 && (
                   <>
                     <Separator />
-                    <p className="text-sm font-semibold text-gray-800">Product Overrides</p>
+                    <p className="text-sm font-semibold text-gray-800">Product Points &amp; Eligibility · unlisted products: {vp.unlistedProducts === 'none' ? 'no points' : 'standard rate'}</p>
                     <div className="border rounded-lg overflow-hidden">
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="bg-gray-50 border-b text-xs text-gray-500">
                             <th className="text-left px-4 py-2.5 font-medium">Product</th>
+                            <th className="text-left px-4 py-2.5 font-medium">SKU</th>
                             <th className="text-right px-4 py-2.5 font-medium">Points/Unit</th>
                           </tr>
                         </thead>
@@ -520,8 +531,11 @@ export function SettingsModule() {
                           {vp.productOverrides.map(o => (
                             <tr key={o.id} className="border-b last:border-0">
                               <td className="px-4 py-2.5 text-gray-800">{o.productName}</td>
+                              <td className="px-4 py-2.5 text-xs font-mono text-gray-500">{o.sku || '—'}</td>
                               <td className="px-4 py-2.5 text-right">
-                                <Badge variant="outline" style={{ borderColor: `${PRIMARY}40`, color: PRIMARY }}>{o.pointsPerUnit} pts</Badge>
+                                {o.eligible === false
+                                  ? <Badge variant="outline" className="text-gray-500">Not eligible</Badge>
+                                  : <Badge variant="outline" style={{ borderColor: `${PRIMARY}40`, color: PRIMARY }}>{o.pointsPerUnit} pts</Badge>}
                               </td>
                             </tr>
                           ))}
@@ -654,51 +668,14 @@ export function SettingsModule() {
 
                 <Separator />
 
-                {/* Product overrides */}
-                <div>
-                  <p className="text-sm font-semibold text-gray-800 mb-1">Product-level Earning Overrides</p>
-                  <p className="text-xs text-gray-500 mb-4">Override the standard rate for specific products.</p>
-                  {fd.productOverrides.length > 0 && (
-                    <div className="border rounded-lg overflow-hidden mb-4">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="bg-gray-50 border-b text-xs text-gray-500">
-                            <th className="text-left px-4 py-2.5 font-medium">Product Name</th>
-                            <th className="text-right px-4 py-2.5 font-medium">Points/Unit</th>
-                            <th className="px-3 py-2.5 w-10" />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {fd.productOverrides.map(o => (
-                            <tr key={o.id} className="border-b last:border-0 hover:bg-gray-50">
-                              <td className="px-4 py-2.5 font-medium text-gray-800">{o.productName}</td>
-                              <td className="px-4 py-2.5 text-right">
-                                <Badge variant="outline" style={{ borderColor: `${PRIMARY}40`, color: PRIMARY }}>{o.pointsPerUnit} pts</Badge>
-                              </td>
-                              <td className="px-3 py-2.5">
-                                <Button variant="ghost" size="icon" className="size-7 hover:bg-red-50 hover:text-red-600"
-                                  onClick={() => loyaltyRemoveOverride(o.id)}>
-                                  <Trash2 className="size-3.5" />
-                                </Button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    <Input placeholder="Product name" value={loyaltyFormOverride.productName}
-                      onChange={e => setLoyaltyFormOverride({ ...loyaltyFormOverride, productName: e.target.value })}
-                      className="flex-1" />
-                    <Input type="number" placeholder="Points/unit" value={loyaltyFormOverride.pointsPerUnit}
-                      onChange={e => setLoyaltyFormOverride({ ...loyaltyFormOverride, pointsPerUnit: e.target.value })}
-                      className="w-36" />
-                    <Button onClick={loyaltyAddOverride} size="sm" style={{ backgroundColor: PRIMARY }} className="hover:opacity-90 text-white">
-                      <Plus className="size-4 mr-1" /> Add
-                    </Button>
-                  </div>
-                </div>
+                {/* Product points & eligibility */}
+                <ProductPointsEditor
+                  rules={fd.productOverrides}
+                  onChange={r => setFd({ productOverrides: r })}
+                  unlisted={fd.unlistedProducts ?? 'standard'}
+                  onUnlistedChange={v => setFd({ unlistedProducts: v })}
+                  standardRate={fd.standardPointsPerRs}
+                />
 
                 {/* Save actions */}
                 <div className="flex gap-2 pt-2 border-t">
@@ -778,7 +755,7 @@ export function SettingsModule() {
                         <span>{prog.standardPointsPerRs} pts/Rs</span>
                         <span>Redeem @ Rs {prog.redemptionRate}/pt</span>
                         {prog.productOverrides.length > 0 && (
-                          <span>{prog.productOverrides.length} overrides</span>
+                          <span>{prog.productOverrides.length} product points rules</span>
                         )}
                       </div>
                     </div>
@@ -904,6 +881,9 @@ export function SettingsModule() {
             </div>
           </>
         );
+
+      case 'fraud':
+        return <FraudRulesSettings SectionHeader={SectionHeader} />;
 
       case 'notifications':
         return (

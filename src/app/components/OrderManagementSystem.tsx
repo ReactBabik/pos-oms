@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { toast } from 'sonner';
+import { OrderLoyaltyPanel } from './LoyaltyTouchpoints';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import type { Language } from '../App';
 import { useFranchiseFilters } from '../utils/franchiseFilters';
@@ -1214,6 +1215,8 @@ export function OrderManagementSystem({ language }: { language: Language }) {
                   <div className="flex justify-between font-bold"><span>Total</span><span>{money(totalOf(dialogOrder))}</span></div>
                 </div>
               </div>
+
+              <OrderLoyaltyPanel order={dialogOrder} />
 
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Order Timeline</p>

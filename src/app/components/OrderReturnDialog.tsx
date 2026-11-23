@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Checkbox } from './ui/checkbox';
 import { Textarea } from './ui/textarea';
 import { useState } from 'react';
+import { useReturnPointsReversal } from './LoyaltyTouchpoints';
 import { Package, AlertCircle, RotateCcw, X } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -58,6 +59,10 @@ export function OrderReturnDialog({
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [returnQuantities, setReturnQuantities] = useState<Record<string, number>>({});
   const [reason, setReason] = useState('');
+  const pointsItems = !order ? [] : returnType === 'complete'
+    ? order.items
+    : order.items.filter(i => selectedItems.has(i.id)).map(i => ({ ...i, quantity: returnQuantities[i.id] || i.quantity }));
+  const reversal = useReturnPointsReversal(order, pointsItems);
 
   if (!order) return null;
 
@@ -155,6 +160,8 @@ export function OrderReturnDialog({
         });
 
     console.log('Return items to send:', returnItems);
+
+    reversal.apply(`RET-${order.id}`);
 
     onReturn({
       orderId: order.id,
@@ -437,6 +444,9 @@ export function OrderReturnDialog({
               </div>
             </div>
           </div>
+
+          {/* Loyalty points reversal (BRD 16.3) */}
+          {reversal.notice}
 
           {/* Return Reason */}
           <div>

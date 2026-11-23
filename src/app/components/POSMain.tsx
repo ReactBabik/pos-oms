@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Label } from './ui/label';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Search, Scan, Plus, Minus, Trash2, DollarSign, CreditCard, User, Phone, MapPin, ShoppingCart, Heart, X, RefreshCw, Camera, Mic, Maximize2, Minimize2, Barcode } from 'lucide-react';
+import { Search, Scan, Plus, Minus, Trash2, DollarSign, CreditCard, User, Phone, MapPin, ShoppingCart, Heart, X, RefreshCw, Camera, Mic, Maximize2, Minimize2, Barcode, Gift } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Language } from '../App';
 import productImg1 from 'figma:asset/af1f57e40da11e117eb40a873e92e4e1383d482c.png';
@@ -16,6 +16,7 @@ import productImg2 from 'figma:asset/79e9316f2141aad01fb899a670136c3e8e63b05b.pn
 import productImg3 from 'figma:asset/24bd79d11f624743962fb0e43db9b5538e21e2d3.png';
 import whatsappLogo from '../../imports/WA_Logo.png';
 import { QRScanner } from './QRScanner';
+import { LoyaltyRedeemDialog } from './LoyaltyTouchpoints';
 import { AICamera } from './AICameraCDN';
 // Lazy load VoiceToCart to avoid build issues with large TensorFlow packages
 import { VoiceToCartLazy } from './VoiceToCartLazy';
@@ -174,6 +175,7 @@ export function POSMain({
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [showRedeemCode, setShowRedeemCode] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
   const [internalShowMobileCart, setInternalShowMobileCart] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'credit'>('cash');
@@ -1599,6 +1601,11 @@ export function POSMain({
           <div>
             <h2 className="text-xl lg:text-2xl font-bold text-gray-900 pl-2">Point of Sale</h2>
           </div>
+          <Button variant="outline" onClick={() => setShowRedeemCode(true)}
+            className="gap-2 border-[#C7359C]/40 text-[#C7359C] hover:bg-[#C7359C]/5 self-start lg:self-auto">
+            <Gift className="size-4" /> Redeem Loyalty Code
+          </Button>
+          <LoyaltyRedeemDialog open={showRedeemCode} onOpenChange={setShowRedeemCode} />
         </div>
 
         <Card className="h-full flex flex-col">
